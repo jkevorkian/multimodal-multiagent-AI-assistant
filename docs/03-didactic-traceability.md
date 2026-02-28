@@ -91,36 +91,6 @@ Reproducible evaluation converts subjective quality into trackable engineering s
 ### Why this technology fits
 Docker enables consistent environment portability and easier public deployment.
 
-## 4.1 Concise Questions Answered (M0)
-### Q1: Why define interfaces before real implementations?
-A: It isolates behavior contracts early, so providers can be swapped without rewriting endpoint logic.
-
-### Q2: Why use request/response schemas for stub endpoints?
-A: Typed schemas force stable API contracts from the start and prevent accidental payload drift.
-
-### Q3: Why introduce structured logging in M0 instead of later?
-A: Traceability is cheapest when built early; retrofitting logs after multiple milestones is harder and less consistent.
-
-### Q4: Why keep endpoint handlers thin?
-A: Thin handlers reduce coupling and make test boundaries clearer (transport layer vs business logic).
-
-### Q5: Why a service container in M0?
-A: It gives a single composition root for dependencies and makes dependency injection explicit and testable.
-
-### Q6: Why use stubs now?
-A: Stubs let contracts and orchestration surfaces be validated before expensive integrations exist.
-
-### Q7: Why expose all required endpoints now as placeholders?
-A: Early contract visibility enables client and test development in parallel with backend feature implementation.
-
-### Q8: Why include request and trace IDs in every response path?
-A: They create a minimal observability backbone for debugging cross-component flows in later milestones.
-
-### Q9: Why is this still useful if answers are placeholders?
-A: Milestone 0 validates architecture quality, not model quality. It de-risks integration and delivery order.
-
-### Q10: What is the main tradeoff of this approach?
-A: Slightly more upfront structure in exchange for lower refactor cost during RAG, agents, and multimodal expansion.
 
 ## 5. Explicit Complexity Delta: Text+Image vs Text+Image+Video
 | Aspect | Text + Image | Text + Image + Video |
@@ -228,3 +198,124 @@ For each milestone completion, update this file with:
 - One section describing what changed in understanding.
 - One section describing what failed and how it was fixed.
 - A reference to affected code modules and tests.
+
+## 9. M0 File-by-File Traceability (Theory + Practice)
+
+## 9.1 Project Setup
+`pyproject.toml`
+- Theoretical role: defines the project as a reproducible Python package with explicit dependency boundaries.
+- Technical/practical role: declares runtime deps (FastAPI, Pydantic), dev deps (pytest/httpx), and pytest defaults.
+
+## 9.2 Application Composition Root
+`app/__init__.py`
+- Theoretical role: marks `app` as the root application package.
+- Technical/practical role: enables absolute imports like `from app.main import app`.
+
+`app/main.py`
+- Theoretical role: composition root that wires configuration, middleware, and route graph.
+- Technical/practical role: creates the FastAPI app via `create_app()`, configures JSON logging, adds request-context middleware, includes routers, and emits startup log event.
+
+## 9.3 Core Infrastructure
+`app/core/__init__.py`
+- Theoretical role: package marker for core cross-cutting concerns.
+- Technical/practical role: groups config/logging/dependency modules under a stable namespace.
+
+`app/core/config.py`
+- Theoretical role: centralizes runtime configuration to support environment-driven behavior.
+- Technical/practical role: defines `Settings` via `BaseSettings` with `MMAA_` env prefix and exposes `settings` singleton.
+
+`app/core/logging.py`
+- Theoretical role: implements observability as a first-class architecture concern.
+- Technical/practical role: provides `JsonFormatter`, root logger setup, and `RequestContextMiddleware` that injects `x-request-id`/`x-trace-id`, measures latency, and logs request completion.
+
+`app/core/dependencies.py`
+- Theoretical role: dependency inversion entry point, decoupling API layer from concrete providers.
+- Technical/practical role: defines stub implementations (`StubLLMClient`, `StubVisionClient`, etc.), `ServiceContainer` dataclass, and cached `get_container()` provider for FastAPI `Depends`.
+
+## 9.4 API Contracts
+`app/contracts/__init__.py`
+- Theoretical role: marks schema package as API contract domain.
+- Technical/practical role: keeps import boundaries clean for request/response models.
+
+`app/contracts/schemas.py`
+- Theoretical role: schema-first API design that stabilizes interfaces before business logic.
+- Technical/practical role: defines all request/response models (`IngestRequest`, `QueryResponse`, `VideoResponse`, `MetricsResponse`, etc.) with validation constraints (lengths, ranges, required fields).
+
+## 9.5 Provider Abstraction Interfaces
+`app/interfaces/__init__.py`
+- Theoretical role: single export surface for interface contracts.
+- Technical/practical role: re-exports protocol types to simplify imports in other layers.
+
+`app/interfaces/llm.py`
+- Theoretical role: standard contract for text generation behavior.
+- Technical/practical role: declares `LLMClient.generate(prompt, context)` protocol.
+
+`app/interfaces/embedding.py`
+- Theoretical role: abstraction for vectorization capability.
+- Technical/practical role: declares `EmbeddingClient.embed_text(text)` returning `list[float]`.
+
+`app/interfaces/vision.py`
+- Theoretical role: model-agnostic visual reasoning contract.
+- Technical/practical role: declares `VisionClient.analyze_image(image_uri, prompt)`.
+
+`app/interfaces/video.py`
+- Theoretical role: separates temporal multimodal behavior from specific vendor APIs.
+- Technical/practical role: declares `VideoClient.analyze_video(...)` with sampling parameters (`sample_fps`, `max_frames`).
+
+`app/interfaces/vector_store.py`
+- Theoretical role: persistence boundary for vector DB concerns.
+- Technical/practical role: declares `upsert()` and `search()` operations used by retrieval systems.
+
+`app/interfaces/retriever.py`
+- Theoretical role: retrieval strategy abstraction independent of storage implementation.
+- Technical/practical role: declares `retrieve(query, top_k)` contract.
+
+`app/interfaces/tool.py`
+- Theoretical role: pluggable tool contract for ReAct-style agent actions.
+- Technical/practical role: declares tool `name` and async `run(payload)` signature.
+
+## 9.6 API Layer
+`app/api/__init__.py`
+- Theoretical role: package marker for transport layer concerns.
+- Technical/practical role: groups routers and route modules.
+
+`app/api/router.py`
+- Theoretical role: central route composition entrypoint.
+- Technical/practical role: builds `api_router` and includes all required route modules so endpoint registration is deterministic.
+
+`app/api/routes/__init__.py`
+- Theoretical role: route namespace marker.
+- Technical/practical role: enables clean module imports from `app.api.routes`.
+
+`app/api/routes/health.py`
+- Theoretical role: operational liveness/readiness contract.
+- Technical/practical role: exposes `GET /health` returning service status, name, and version.
+
+`app/api/routes/ingest.py`
+- Theoretical role: ingestion boundary between external content sources and future indexing pipeline.
+- Technical/practical role: exposes `POST /ingest/documents`, validates payload, returns accepted source count and trace metadata.
+
+`app/api/routes/query.py`
+- Theoretical role: baseline RAG query interaction boundary.
+- Technical/practical role: exposes `POST /query`, calls retriever + LLM stubs, returns answer/citations/confidence/trace.
+
+`app/api/routes/agents.py`
+- Theoretical role: orchestration entrypoint for multi-agent behavior.
+- Technical/practical role: exposes `POST /agents/run`, returns role-step sequence and tool-call list.
+
+`app/api/routes/vision.py`
+- Theoretical role: image modality integration boundary.
+- Technical/practical role: exposes `POST /vision/analyze`, invokes vision client stub, returns findings and confidence.
+
+`app/api/routes/video.py`
+- Theoretical role: video modality integration boundary with explicit temporal-processing knobs.
+- Technical/practical role: exposes `POST /video/analyze`, forwards sampling params, returns key events and processed frame count.
+
+`app/api/routes/metrics.py`
+- Theoretical role: observability and evaluation reporting boundary.
+- Technical/practical role: exposes `GET /metrics` with placeholder latency/cost/accuracy fields and timestamp.
+
+## 9.7 Test Layer
+`tests/test_api_contracts.py`
+- Theoretical role: contract verification layer ensuring the architecture shell is correct before real feature logic.
+- Technical/practical role: validates required routes, schema-shaped responses, and request/trace headers using FastAPI `TestClient`.
