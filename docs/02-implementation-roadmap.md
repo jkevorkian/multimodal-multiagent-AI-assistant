@@ -50,7 +50,7 @@ Create a stable architecture shell with provider abstraction, endpoint contracts
 
 ## M1 - Text RAG Baseline
 ### Objective
-Deliver ingest -> embed -> retrieve -> answer flow for text queries.
+Deliver ingest -> embed -> retrieve -> answer flow for text queries using modern RAG baseline techniques.
 
 ### Outputs
 - Code modules:
@@ -58,31 +58,45 @@ Deliver ingest -> embed -> retrieve -> answer flow for text queries.
   - `app/rag/chunking.py`
   - `app/rag/embeddings.py`
   - `app/rag/retriever.py`
+  - `app/rag/reranker.py`
   - `app/storage/pgvector_store.py`
+  - `app/storage/qdrant_store.py`
+  - `app/storage/fallback_vector_store.py`
+  - `app/interfaces/reranker.py`
 - Endpoints:
   - `/ingest/documents`
   - `/query`
 - Tests:
+  - Embedding provider selection tests.
+  - Hybrid retrieval + rank-fusion tests.
+  - Reranker hook tests.
+  - Vector store fallback/coexistence tests (external store primary, pgvector secondary).
   - PDF and URL ingestion tests.
   - Chunking determinism tests.
   - Retrieval smoke tests with known corpus.
 - Docs updates:
-  - Add retrieval design and PGVector rationale in didactic doc.
+  - Add neural embedding strategy, hybrid retrieval design, and reranking rationale in didactic doc.
 
 ### Risks and Mitigation
-- Risk: Poor retrieval relevance due to chunking strategy.
-- Mitigation: Add tunable chunk size/overlap and evaluate with fixed benchmark set.
+- Risk: Latency increase from hybrid retrieval and reranking.
+- Mitigation: Configure dense/lexical/rerank candidate budgets and default rerank off for small corpora.
+
+- Risk: provider/runtime mismatch (missing external embedding model dependency).
+- Mitigation: keep deterministic fallback provider and explicit startup logging of active provider.
 
 ### Rollback/Fallback
-- Fallback to lexical retrieval (BM25/simple keyword) if embeddings unavailable.
+- Fallback to deterministic embeddings and lexical-only retrieval if neural provider unavailable.
 
 ### Definition of Done
 - Query answers include retrieved citations.
+- Hybrid retrieval (dense + lexical + rank fusion) works end-to-end.
+- Reranker hook is pluggable and test-covered.
 - PGVector + JSONB metadata persistence works end-to-end.
+- External vector-store adapter can coexist with pgvector/in-memory fallback.
 
 ## M2 - ReAct Tools + Multi-Agent Orchestration
 ### Objective
-Add explicit role-based orchestration and tool routing.
+Add explicit role-based orchestration and tool routing with durable execution and MCP-ready tool interfaces.
 
 ### Outputs
 - Code modules:
@@ -92,18 +106,22 @@ Add explicit role-based orchestration and tool routing.
   - `app/agents/answer_agent.py`
   - `app/agents/orchestrator.py`
   - `app/tools/registry.py`
+  - `app/tools/mcp_adapter.py`
+  - `app/agents/checkpoint_store.py`
 - Endpoints:
   - `/agents/run`
 - Tests:
   - State transition tests.
   - Tool-selection scenario tests.
+  - Tool-call idempotency tests across resume points.
+  - Human-interrupt/resume tests for long-running runs.
   - Timeout/retry behavior tests.
 - Docs updates:
-  - Add agent control-flow trace example and state model explanation.
+  - Add agent control-flow trace example, state model explanation, and MCP tool integration pattern.
 
 ### Risks and Mitigation
 - Risk: Unstable or looping agent behavior.
-- Mitigation: Add max-step guardrails, tool budget, and fallback answer policy.
+- Mitigation: Add max-step guardrails, tool budget, loop detection, and checkpoint-based resume.
 
 ### Rollback/Fallback
 - Route `/agents/run` to single-agent deterministic chain on orchestration failure.
@@ -111,10 +129,11 @@ Add explicit role-based orchestration and tool routing.
 ### Definition of Done
 - Multi-agent sequence executes with trace logs.
 - Tool calls are bounded and observable.
+- Runs can be resumed from checkpoints without repeating completed tool calls.
 
 ## M3 - Image Multimodal Path
 ### Objective
-Support image analysis and integrate visual findings into answer generation.
+Support image analysis and integrate visual findings into answer generation with evidence-grounded multimodal retrieval.
 
 ### Outputs
 - Code modules:
@@ -125,9 +144,10 @@ Support image analysis and integrate visual findings into answer generation.
   - `/vision/analyze`
 - Tests:
   - Deterministic image fixtures.
+  - Vision-grounding tests that require explicit visual evidence references.
   - Request size/type validation tests.
 - Docs updates:
-  - Add vision pipeline didactic section.
+  - Add vision pipeline didactic section and modality-fusion strategy notes.
 
 ### Risks and Mitigation
 - Risk: Hallucinated visual details.
@@ -141,7 +161,7 @@ Support image analysis and integrate visual findings into answer generation.
 
 ## M4 - Video MVP Path
 ### Objective
-Add video understanding with frame sampling + temporal aggregation.
+Add video understanding with frame sampling + temporal aggregation and retrieval-aware temporal grounding.
 
 ### Outputs
 - Code modules:
@@ -153,6 +173,7 @@ Add video understanding with frame sampling + temporal aggregation.
 - Tests:
   - Frame extraction correctness tests.
   - Temporal summary coherence tests.
+  - Retrieval-grounded timeline citation tests.
   - Latency budget tests.
 - Docs updates:
   - Add explicit text+image vs text+image+video complexity delta.
@@ -184,6 +205,8 @@ Make runtime behavior reliable, observable, and cost-aware.
   - Retry idempotency tests.
   - Cache hit/miss behavior tests.
   - Error taxonomy and mapping tests.
+  - Structured-output schema conformance tests for all answering endpoints.
+  - Online/offline retrieval quality regression gate tests.
 - Docs updates:
   - Resilience and cost optimization explanations.
 
@@ -205,6 +228,8 @@ Operationalize benchmarking and deployment artifacts.
 ### Outputs
 - Code modules:
   - `evaluation/runner.py`
+  - `evaluation/retrieval_metrics.py`
+  - `evaluation/generation_metrics.py`
   - `evaluation/datasets/*.jsonl`
   - `deployment/Dockerfile`
   - `deployment/docker-compose.yml`
@@ -212,6 +237,8 @@ Operationalize benchmarking and deployment artifacts.
   - `/metrics` includes aggregate benchmark results.
 - Tests:
   - Reproducible benchmark run.
+  - Retrieval benchmark reproducibility test (recall@k, MRR/NDCG).
+  - Grounded generation benchmark reproducibility test (faithfulness, citation precision).
   - Container startup and health checks.
 - Docs updates:
   - Deployment runbook and metric interpretation guide.
@@ -225,6 +252,7 @@ Operationalize benchmarking and deployment artifacts.
 
 ### Definition of Done
 - Benchmark report includes accuracy, latency, and cost.
+- Benchmark report includes retrieval and grounding metrics by milestone profile.
 - Service runs from container and exposes public-ready config.
 
 ## 4. Cross-Milestone Quality Gates

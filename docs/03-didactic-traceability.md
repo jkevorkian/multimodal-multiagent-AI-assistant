@@ -12,12 +12,12 @@ This document explains learning intent and technical reasoning during implementa
 | Milestone | Feature | Core concepts to learn | Main technologies |
 | --- | --- | --- | --- |
 | M0 | Architecture shell | Interfaces, dependency inversion, schema-first APIs, structured logging | FastAPI, Pydantic, Python typing |
-| M1 | Text RAG | Chunking, embeddings, similarity search, retrieval grounding | PostgreSQL, PGVector, JSONB |
-| M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops | LangGraph, tool registry patterns |
+| M1 | Text RAG | Chunking, neural embeddings, hybrid retrieval, reranking, retrieval grounding | PostgreSQL, PGVector, neural embedding adapters, rank fusion |
+| M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops, durable checkpoints | LangGraph, MCP tool adapters, tool registry patterns |
 | M3 | Image path | Input preprocessing, multimodal inference, evidence fusion | Vision model adapters |
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
 | M5 | Hardening | Retry strategy, caching layers, model routing, error taxonomy | Async IO, resilient API patterns |
-| M6 | Evaluation + deploy | Metric design, reproducibility, containerization | Benchmark runners, Docker |
+| M6 | Evaluation + deploy | Metric design, retrieval/generation evaluation, reproducibility, containerization | Benchmark runners, Docker, retrieval/grounding metrics |
 
 ## 4. Didactic Cards by Milestone
 
@@ -33,13 +33,32 @@ FastAPI + Pydantic gives strict request/response validation with low ceremony an
 
 ## M1 - Text RAG
 ### How it works
-Documents are ingested, chunked, embedded, and stored as vectors. Query vectors retrieve nearest chunks, and the model answers using those chunks.
+Documents are ingested, chunked, embedded, and stored as vectors plus metadata. Queries run hybrid retrieval (dense + lexical), optional reranking, then answer generation from selected evidence.
 
 ### Why it works
-Semantic retrieval approximates conceptual similarity better than plain keyword matching, improving grounded answers.
+Dense retrieval captures semantic similarity; lexical retrieval captures exact-term relevance; reranking improves final ordering quality. Their combination increases robustness across query types.
 
 ### Why this technology fits
-PGVector inside PostgreSQL keeps vectors and metadata in one operational store, simplifying early architecture.
+PGVector inside PostgreSQL keeps vectors and metadata in one store, while provider adapters allow neural embedding upgrades without API contract changes.
+
+### Retrieval design (M1 modern baseline)
+- Deterministic chunking remains configurable for reproducible tests.
+- Embedding layer is provider-pluggable: neural providers in production profile, deterministic fallback for local/test resilience.
+- Vector-store layer is adapter-based: pgvector baseline plus optional external vector DB primary with pgvector/in-memory fallback coexistence.
+- Retrieval uses dense search and lexical search in parallel, fuses results (RRF), and supports reranker hook for final ordering.
+- Ingestion stores vector and trace metadata (`source`, `chunk_id`, `offset`, `snippet`) for grounded citations.
+
+### PGVector rationale (with pragmatic fallback)
+- Primary path: PostgreSQL + PGVector + JSONB in a single table to keep vectors and metadata strongly linked.
+- Fallback path: in-memory vector index with the same metadata contract to preserve API behavior in local/dev environments without a running DB.
+- Result: endpoint contracts stay stable while infra requirements scale from local prototype to production database deployment.
+
+### M2+ Improvement Targets Detected from M1 Review
+- M2: durable orchestration with checkpoint/resume and idempotent tool-call replay.
+- M2: MCP adapter boundary in tool registry so tool integration is protocol-driven.
+- M3/M4: evidence-grounded multimodal outputs with citation-style visual/temporal references.
+- M5: structured output validation and automated regression gates for retrieval quality.
+- M6: benchmark suite with retrieval metrics (recall@k, MRR/NDCG) plus grounding/faithfulness metrics.
 
 ## M2 - ReAct + Multi-agent
 ### How it works
@@ -162,11 +181,55 @@ Use this entry template for every major decision:
 - Would we choose it again?: yes.
 - Affected modules: all milestone scopes.
 
+- Date: 2026-02-28
+- Milestone: M1
+- Context: Needed a complete ingest->retrieve path while keeping local development friction low.
+- Decision: implement PGVector store with automatic in-memory fallback when PostgreSQL/psycopg is unavailable.
+- Alternatives considered: hard-fail without PostgreSQL, pure in-memory only.
+- Why chosen: preserves production architecture direction while avoiding local blockers.
+- Expected impact: stable API behavior across environments, with clear upgrade path to full DB-backed persistence.
+- Observed outcome: M1 tests validate ingestion/query flow and citation grounding without requiring external DB setup.
+- Would we choose it again?: yes.
+- Affected modules: `app/storage/pgvector_store.py`, `app/core/dependencies.py`, `app/api/routes/ingest.py`, `app/api/routes/query.py`.
+
+- Date: 2026-02-28
+- Milestone: M1
+- Context: Need predictable retrieval behavior for automated tests and didactic traceability.
+- Decision: use deterministic hashing-based embeddings and deterministic chunk splitting.
+- Alternatives considered: random vectors for stubs, external embedding provider from day one.
+- Why chosen: deterministic behavior makes regressions easy to detect and reason about.
+- Expected impact: repeatable retrieval smoke tests and easier tuning of chunk parameters.
+- Observed outcome: chunking determinism and retrieval tests are stable across runs.
+- Would we choose it again?: yes.
+- Affected modules: `app/rag/chunking.py`, `app/rag/embeddings.py`, `app/rag/ingestion.py`, `app/rag/retriever.py`, `tests/test_m1_rag.py`.
+
+- Date: 2026-03-01
+- Milestone: M1
+- Context: Deterministic hash embeddings provide reproducibility but weak semantic generalization.
+- Decision: upgrade M1 baseline to pluggable neural embeddings + hybrid retrieval + reranker hook while keeping deterministic fallback.
+- Alternatives considered: keep current hash baseline, move directly to full agentic retrieval in M2.
+- Why chosen: improves retrieval quality now without violating milestone boundaries.
+- Expected impact: better semantic recall and more stable relevance ranking across mixed query types.
+- Observed outcome: provider-pluggable embedding layer, hybrid retrieval with RRF, and reranker hook are implemented with regression tests; M1 suite remains green.
+- Would we choose it again?: yes.
+- Affected modules: `app/interfaces/embedding.py`, `app/interfaces/reranker.py`, `app/interfaces/vector_store.py`, `app/rag/embeddings.py`, `app/rag/retriever.py`, `app/rag/reranker.py`, `app/storage/pgvector_store.py`, `app/core/config.py`, `app/core/dependencies.py`, `tests/test_m1_rag.py`.
+
+- Date: 2026-03-03
+- Milestone: M1
+- Context: Need a production-grade external vector DB option while preserving local reliability and existing pgvector behavior.
+- Decision: add Qdrant adapter and fallback-wrapper store so external DB can coexist with pgvector/in-memory fallback.
+- Alternatives considered: hard switch to external store only, keep pgvector-only path.
+- Why chosen: de-risks rollout and keeps development/test workflows stable while enabling production external vector DB usage.
+- Expected impact: easier production adoption of managed vector DB while preserving zero-downtime fallback behavior.
+- Observed outcome: Qdrant adapter plus fallback store implemented and covered by adapter tests; full suite remains green.
+- Would we choose it again?: yes.
+- Affected modules: `app/storage/qdrant_store.py`, `app/storage/fallback_vector_store.py`, `app/core/config.py`, `app/core/dependencies.py`, `tests/test_vector_store_fallback.py`.
+
 ## 7. Common Failure Modes and Debugging Heuristics
 
 ## RAG
 - Failure mode: low-relevance retrieval.
-- Heuristic: inspect chunk size/overlap, embedding model choice, and top-k configuration.
+- Heuristic: inspect chunk size/overlap, embedding provider/model, dense/lexical fusion balance, and rerank candidate budget.
 
 - Failure mode: answer without grounding.
 - Heuristic: enforce citation-required response schema and reject uncited outputs.
@@ -199,123 +262,8 @@ For each milestone completion, update this file with:
 - One section describing what failed and how it was fixed.
 - A reference to affected code modules and tests.
 
-## 9. M0 File-by-File Traceability (Theory + Practice)
+## 9. File-Level Traceability Location
+File-by-file traceability has been moved to:
+- `docs/04-file-traceability-by-milestone.md`
 
-## 9.1 Project Setup
-`pyproject.toml`
-- Theoretical role: defines the project as a reproducible Python package with explicit dependency boundaries.
-- Technical/practical role: declares runtime deps (FastAPI, Pydantic), dev deps (pytest/httpx), and pytest defaults.
-
-## 9.2 Application Composition Root
-`app/__init__.py`
-- Theoretical role: marks `app` as the root application package.
-- Technical/practical role: enables absolute imports like `from app.main import app`.
-
-`app/main.py`
-- Theoretical role: composition root that wires configuration, middleware, and route graph.
-- Technical/practical role: creates the FastAPI app via `create_app()`, configures JSON logging, adds request-context middleware, includes routers, and emits startup log event.
-
-## 9.3 Core Infrastructure
-`app/core/__init__.py`
-- Theoretical role: package marker for core cross-cutting concerns.
-- Technical/practical role: groups config/logging/dependency modules under a stable namespace.
-
-`app/core/config.py`
-- Theoretical role: centralizes runtime configuration to support environment-driven behavior.
-- Technical/practical role: defines `Settings` via `BaseSettings` with `MMAA_` env prefix and exposes `settings` singleton.
-
-`app/core/logging.py`
-- Theoretical role: implements observability as a first-class architecture concern.
-- Technical/practical role: provides `JsonFormatter`, root logger setup, and `RequestContextMiddleware` that injects `x-request-id`/`x-trace-id`, measures latency, and logs request completion.
-
-`app/core/dependencies.py`
-- Theoretical role: dependency inversion entry point, decoupling API layer from concrete providers.
-- Technical/practical role: defines stub implementations (`StubLLMClient`, `StubVisionClient`, etc.), `ServiceContainer` dataclass, and cached `get_container()` provider for FastAPI `Depends`.
-
-## 9.4 API Contracts
-`app/contracts/__init__.py`
-- Theoretical role: marks schema package as API contract domain.
-- Technical/practical role: keeps import boundaries clean for request/response models.
-
-`app/contracts/schemas.py`
-- Theoretical role: schema-first API design that stabilizes interfaces before business logic.
-- Technical/practical role: defines all request/response models (`IngestRequest`, `QueryResponse`, `VideoResponse`, `MetricsResponse`, etc.) with validation constraints (lengths, ranges, required fields).
-
-## 9.5 Provider Abstraction Interfaces
-`app/interfaces/__init__.py`
-- Theoretical role: single export surface for interface contracts.
-- Technical/practical role: re-exports protocol types to simplify imports in other layers.
-
-`app/interfaces/llm.py`
-- Theoretical role: standard contract for text generation behavior.
-- Technical/practical role: declares `LLMClient.generate(prompt, context)` protocol.
-
-`app/interfaces/embedding.py`
-- Theoretical role: abstraction for vectorization capability.
-- Technical/practical role: declares `EmbeddingClient.embed_text(text)` returning `list[float]`.
-
-`app/interfaces/vision.py`
-- Theoretical role: model-agnostic visual reasoning contract.
-- Technical/practical role: declares `VisionClient.analyze_image(image_uri, prompt)`.
-
-`app/interfaces/video.py`
-- Theoretical role: separates temporal multimodal behavior from specific vendor APIs.
-- Technical/practical role: declares `VideoClient.analyze_video(...)` with sampling parameters (`sample_fps`, `max_frames`).
-
-`app/interfaces/vector_store.py`
-- Theoretical role: persistence boundary for vector DB concerns.
-- Technical/practical role: declares `upsert()` and `search()` operations used by retrieval systems.
-
-`app/interfaces/retriever.py`
-- Theoretical role: retrieval strategy abstraction independent of storage implementation.
-- Technical/practical role: declares `retrieve(query, top_k)` contract.
-
-`app/interfaces/tool.py`
-- Theoretical role: pluggable tool contract for ReAct-style agent actions.
-- Technical/practical role: declares tool `name` and async `run(payload)` signature.
-
-## 9.6 API Layer
-`app/api/__init__.py`
-- Theoretical role: package marker for transport layer concerns.
-- Technical/practical role: groups routers and route modules.
-
-`app/api/router.py`
-- Theoretical role: central route composition entrypoint.
-- Technical/practical role: builds `api_router` and includes all required route modules so endpoint registration is deterministic.
-
-`app/api/routes/__init__.py`
-- Theoretical role: route namespace marker.
-- Technical/practical role: enables clean module imports from `app.api.routes`.
-
-`app/api/routes/health.py`
-- Theoretical role: operational liveness/readiness contract.
-- Technical/practical role: exposes `GET /health` returning service status, name, and version.
-
-`app/api/routes/ingest.py`
-- Theoretical role: ingestion boundary between external content sources and future indexing pipeline.
-- Technical/practical role: exposes `POST /ingest/documents`, validates payload, returns accepted source count and trace metadata.
-
-`app/api/routes/query.py`
-- Theoretical role: baseline RAG query interaction boundary.
-- Technical/practical role: exposes `POST /query`, calls retriever + LLM stubs, returns answer/citations/confidence/trace.
-
-`app/api/routes/agents.py`
-- Theoretical role: orchestration entrypoint for multi-agent behavior.
-- Technical/practical role: exposes `POST /agents/run`, returns role-step sequence and tool-call list.
-
-`app/api/routes/vision.py`
-- Theoretical role: image modality integration boundary.
-- Technical/practical role: exposes `POST /vision/analyze`, invokes vision client stub, returns findings and confidence.
-
-`app/api/routes/video.py`
-- Theoretical role: video modality integration boundary with explicit temporal-processing knobs.
-- Technical/practical role: exposes `POST /video/analyze`, forwards sampling params, returns key events and processed frame count.
-
-`app/api/routes/metrics.py`
-- Theoretical role: observability and evaluation reporting boundary.
-- Technical/practical role: exposes `GET /metrics` with placeholder latency/cost/accuracy fields and timestamp.
-
-## 9.7 Test Layer
-`tests/test_api_contracts.py`
-- Theoretical role: contract verification layer ensuring the architecture shell is correct before real feature logic.
-- Technical/practical role: validates required routes, schema-shaped responses, and request/trace headers using FastAPI `TestClient`.
+This keeps this document focused on learning intent, milestone rationale, and technical decision history.

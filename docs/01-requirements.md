@@ -27,14 +27,17 @@ This document defines what the `multimodal-multiagent-AI-assistant` must do, wha
 | --- | --- | --- |
 | FR-001 | The system shall ingest documents from PDF files and web URLs. | Integration test that ingests sample PDF and URL and confirms indexed chunks > 0. |
 | FR-002 | The system shall chunk ingested content and store chunk metadata for retrieval traceability. | Unit test validating chunk boundaries and metadata fields (`source`, `chunk_id`, `offset`). |
-| FR-003 | The system shall generate embeddings and persist vectors in PostgreSQL with PGVector and JSONB metadata. | DB integration test confirming vector and metadata insertion/retrieval. |
-| FR-004 | The system shall answer text queries using retrieved context (RAG). | End-to-end test with known question/context pair and citation presence. |
-| FR-005 | The system shall expose tool-calling behavior where the agent decides when to call tools. | Scenario test where at least one tool is selected and executed by policy. |
-| FR-006 | The system shall implement multi-agent roles: Research Agent, Analyst Agent, Answer Agent. | Orchestration test verifying role execution order and shared state transitions. |
-| FR-007 | The system shall analyze images and return a textual interpretation. | API test for `/vision/analyze` using deterministic sample image. |
-| FR-008 | The system shall analyze video input using frame sampling and temporal aggregation. | API test for `/video/analyze` validating frame extraction and synthesis output. |
-| FR-009 | The system shall expose the following API endpoints: `/health`, `/ingest/documents`, `/query`, `/agents/run`, `/vision/analyze`, `/video/analyze`, `/metrics`. | Contract tests confirming endpoint availability, status codes, and schema conformance. |
-| FR-010 | The system shall provide evaluation outputs for accuracy, latency, and cost at run and aggregate levels. | Evaluation runner test generating per-run and summary report artifacts. |
+| FR-003 | The system shall support pluggable embedding providers and use a neural-network embedding model in production mode. | Adapter tests for provider selection + integration test that indexes and retrieves semantically related text. |
+| FR-004 | The system shall persist vectors in PostgreSQL with PGVector and JSONB metadata. | DB integration test confirming vector and metadata insertion/retrieval. |
+| FR-005 | The system shall use hybrid retrieval (dense + lexical) with rank fusion and optional reranking. | Retrieval test asserting relevant chunk is retrieved when either lexical or semantic branch is strong. |
+| FR-006 | The system shall answer text queries using retrieved context (RAG) with citations. | End-to-end test with known question/context pair and citation presence. |
+| FR-007 | The system shall expose tool-calling behavior where the agent decides when to call tools. | Scenario test where at least one tool is selected and executed by policy. |
+| FR-008 | The system shall implement multi-agent roles: Research Agent, Analyst Agent, Answer Agent. | Orchestration test verifying role execution order and shared state transitions. |
+| FR-009 | The system shall analyze images and return a textual interpretation. | API test for `/vision/analyze` using deterministic sample image. |
+| FR-010 | The system shall analyze video input using frame sampling and temporal aggregation. | API test for `/video/analyze` validating frame extraction and synthesis output. |
+| FR-011 | The system shall expose the following API endpoints: `/health`, `/ingest/documents`, `/query`, `/agents/run`, `/vision/analyze`, `/video/analyze`, `/metrics`. | Contract tests confirming endpoint availability, status codes, and schema conformance. |
+| FR-012 | The system shall provide evaluation outputs for accuracy, latency, and cost at run and aggregate levels. | Evaluation runner test generating per-run and summary report artifacts. |
+| FR-013 | The system shall support pluggable vector store backends with fallback coexistence (external vector DB + PostgreSQL/in-memory). | Adapter tests validating fallback behavior when primary store is unavailable. |
 
 ## 5. Required Public Contracts
 ### 5.1 Endpoints
@@ -61,6 +64,7 @@ This document defines what the `multimodal-multiagent-AI-assistant` must do, wha
 - `VideoClient`
 - `VectorStore`
 - `Retriever`
+- `Reranker`
 - `Tool`
 
 ### 5.4 Orchestration State
@@ -78,6 +82,7 @@ Shared state object must include at least:
 - NFR-PERF-001: `/query` text response p95 latency <= 8s for corpus up to 10,000 chunks in MVP test environment.
 - NFR-PERF-002: `/vision/analyze` p95 latency <= 10s for image <= 5MB.
 - NFR-PERF-003: `/video/analyze` p95 latency <= 30s for video <= 30s duration and <= 100MB.
+- NFR-PERF-004: retrieval stage shall support independent budgets for dense search, lexical search, and reranking candidate pool.
 
 ### 6.2 Reliability
 - NFR-REL-001: >= 99% successful responses over 100-request smoke run excluding invalid input cases.
@@ -90,6 +95,7 @@ Shared state object must include at least:
 ### 6.4 Cost Constraints
 - NFR-COST-001: Embedding and response caching must be enabled by default in non-debug environments.
 - NFR-COST-002: Model routing must support at least one lower-cost default model and one higher-quality fallback model.
+- NFR-COST-003: embedding provider selection must allow low-cost vs high-quality profiles without code changes.
 
 ### 6.5 Security Baseline
 - NFR-SEC-001: Secrets must be sourced from environment variables; no hardcoded API keys.
@@ -107,7 +113,7 @@ MVP is complete when all of the following are true:
 
 ## 8. Acceptance Criteria Checklist
 ### Functional
-- [ ] FR-001 through FR-010 are validated by automated tests.
+- [ ] FR-001 through FR-013 are validated by automated tests.
 - [ ] API contract tests pass for all required endpoints.
 - [ ] Multi-agent run traces show role-specific steps and state transitions.
 

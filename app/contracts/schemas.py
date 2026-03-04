@@ -24,6 +24,7 @@ class IngestRequest(BaseModel):
 class IngestResponse(BaseModel):
     status: str
     accepted_sources: int
+    indexed_chunks: int = 0
     trace: Trace
 
 
@@ -84,4 +85,3 @@ class MetricsResponse(BaseModel):
     p95_latency_ms: int | None = None
     avg_cost_usd: float | None = None
     last_updated: datetime | None = None
-

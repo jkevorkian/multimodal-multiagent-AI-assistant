@@ -1,3 +1,6 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -30,12 +33,16 @@ def test_health_contract() -> None:
 
 
 def test_ingest_contract() -> None:
-    response = client.post("/ingest/documents", json={"sources": ["file://sample.pdf"], "source_type": "pdf"})
-    payload = response.json()
-    assert response.status_code == 200
-    assert payload["status"] == "accepted"
-    assert payload["accepted_sources"] == 1
-    assert "trace" in payload
+    with TemporaryDirectory() as temp_dir:
+        pdf_path = Path(temp_dir) / "sample.pdf"
+        pdf_path.write_text("M1 contract fixture content.", encoding="utf-8")
+        response = client.post("/ingest/documents", json={"sources": [pdf_path.as_uri()], "source_type": "pdf"})
+        payload = response.json()
+        assert response.status_code == 200
+        assert payload["status"] == "accepted"
+        assert payload["accepted_sources"] == 1
+        assert payload["indexed_chunks"] > 0
+        assert "trace" in payload
 
 
 def test_query_contract() -> None:
@@ -87,4 +94,3 @@ def test_trace_headers_added() -> None:
     response = client.get("/health")
     assert response.headers.get("x-request-id")
     assert response.headers.get("x-trace-id")
-

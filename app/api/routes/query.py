@@ -13,11 +13,13 @@ async def query(
     container: ServiceContainer = Depends(get_container),
 ) -> QueryResponse:
     context = await container.retriever.retrieve(payload.query, payload.top_k)
-    answer = await container.llm.generate(payload.query, [c["snippet"] for c in context])
+    snippets = [item["snippet"] for item in context if item.get("snippet")]
+    answer = await container.llm.generate(payload.query, snippets)
+    citations = [f"{item['source']}#chunk-{item['chunk_id']}" for item in context]
+    confidence = round(min(0.95, 0.35 + (0.12 * len(citations))), 2) if citations else 0.15
     return QueryResponse(
         answer=answer,
-        citations=[c["source"] for c in context],
-        confidence=0.25,
+        citations=citations,
+        confidence=confidence,
         trace=Trace(request_id=request.state.request_id, trace_id=request.state.trace_id),
     )
-
