@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     rag_reranker_enabled: bool = True
     rag_reranker_provider: str = "lexical"
     rag_reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    agent_max_steps: int = 6
+    agent_tool_budget: int = 2
+    agent_tool_timeout_sec: float = 2.0
+    agent_tool_retries: int = 1
+    agent_retrieval_top_k: int = 5
+    agent_checkpoint_enabled: bool = True
+    agent_resume_from_checkpoint: bool = True
 
     model_config = SettingsConfigDict(env_prefix="MMAA_", extra="ignore")
 

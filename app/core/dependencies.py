@@ -3,10 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
+from app.agents import (
+    AgentOrchestrator,
+    AnalystAgent,
+    AnswerAgent,
+    InMemoryCheckpointStore,
+    NullCheckpointStore,
+    ResearchAgent,
+)
 from app.core.config import settings
 from app.interfaces import EmbeddingClient, LLMClient, Reranker, Retriever, Tool, VectorStore, VideoClient, VisionClient
 from app.rag import DocumentIngestionService, TextRAGRetriever, build_embedding_client, build_reranker
 from app.storage import FallbackVectorStore, PgVectorStore, QdrantVectorStore
+from app.tools import ToolRegistry
 
 
 class GroundedLLMClient:
@@ -51,6 +60,8 @@ class ServiceContainer:
     vision: VisionClient
     video: VideoClient
     tools: list[Tool]
+    tool_registry: ToolRegistry
+    orchestrator: AgentOrchestrator
     embedding_provider: str
     reranker_provider: str
     vector_store_provider: str
@@ -114,9 +125,28 @@ def build_service_container(database_url: str | None = None) -> ServiceContainer
         rrf_k=settings.rag_rrf_k,
         rerank_pool_size=settings.rag_rerank_pool_size,
     )
+    tools: list[Tool] = [StubTool()]
+    tool_registry = ToolRegistry(tools)
+    research_agent = ResearchAgent(
+        retriever=retriever,
+        tool_registry=tool_registry,
+        retrieval_top_k=settings.agent_retrieval_top_k,
+        tool_timeout_sec=settings.agent_tool_timeout_sec,
+        tool_retries=settings.agent_tool_retries,
+    )
+    checkpoint_store = InMemoryCheckpointStore() if settings.agent_checkpoint_enabled else NullCheckpointStore()
+    llm = GroundedLLMClient()
+    answer_agent = AnswerAgent(llm=llm)
+    orchestrator = AgentOrchestrator(
+        research_agent=research_agent,
+        analyst_agent=AnalystAgent(),
+        answer_agent=answer_agent,
+        checkpoint_store=checkpoint_store,
+        max_steps=settings.agent_max_steps,
+    )
 
     return ServiceContainer(
-        llm=GroundedLLMClient(),
+        llm=llm,
         embeddings=embeddings,
         reranker=reranker_selection.reranker,
         retriever=retriever,
@@ -124,7 +154,9 @@ def build_service_container(database_url: str | None = None) -> ServiceContainer
         ingestion=ingestion,
         vision=StubVisionClient(),
         video=StubVideoClient(),
-        tools=[StubTool()],
+        tools=tools,
+        tool_registry=tool_registry,
+        orchestrator=orchestrator,
         embedding_provider=embedding_selection.provider_name,
         reranker_provider=reranker_selection.provider_name,
         vector_store_provider=vector_store_provider,
