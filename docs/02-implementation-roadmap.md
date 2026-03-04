@@ -9,7 +9,8 @@ Implement the assistant in milestone order so each phase is deployable, testable
 | M0 | Skeleton and contracts | Medium | None |
 | M1 | Text RAG baseline | Medium | M0 |
 | M2 | ReAct tools + multi-agent orchestration | High | M1 |
-| M3 | Image multimodal path | Medium | M2 |
+| M2.2 | Streamlit frontend + architecture visualization | Low | M2 |
+| M3 | Image multimodal path | Medium | M2.2 |
 | M4 | Video MVP path | High | M3 |
 | M5 | Production hardening | High | M1-M4 |
 | M6 | Evaluation and deployment | Medium | M5 |
@@ -130,6 +131,39 @@ Add explicit role-based orchestration and tool routing with durable execution an
 - Multi-agent sequence executes with trace logs.
 - Tool calls are bounded and observable.
 - Runs can be resumed from checkpoints without repeating completed tool calls.
+
+### Implementation Status
+- Current branch status (2026-03-04): implemented and test-covered.
+
+## M2.2 - Streamlit Frontend + Architecture Visualization
+### Objective
+Provide a lightweight UI to exercise backend routes and communicate the high-level system architecture (modules and control/data flows).
+
+### Outputs
+- Code modules:
+  - `frontend/streamlit_app.py`
+  - `frontend/architecture.py`
+- Endpoints:
+  - no new backend endpoint; reuses existing API routes from `M0-M2`.
+- Tests:
+  - Frontend architecture helper output test.
+- Docs updates:
+  - Add M2.2 rationale and traceability entries in didactic and file-level docs.
+
+### Risks and Mitigation
+- Risk: frontend drifts from backend contracts.
+- Mitigation: route forms map directly to current Pydantic contracts and are validated by existing API tests.
+
+### Rollback/Fallback
+- Fallback to CLI/API-only usage while keeping architecture module as static documentation artifact.
+
+### Definition of Done
+- Streamlit app can call core routes (`/health`, `/ingest/documents`, `/query`, `/agents/run`, `/metrics`).
+- Architecture diagram renders and explains major module interactions at high level.
+- M2.2 frontend helper tests pass.
+
+### Implementation Status
+- Current branch status (2026-03-04): implemented in current working tree.
 
 ## M3 - Image Multimodal Path
 ### Objective
@@ -261,13 +295,14 @@ Operationalize benchmarking and deployment artifacts.
 - Didactic traceability doc must be updated in the same PR as implementation.
 
 ## 5. Final Integration and Demo Sequence
-1. Start service and validate `/health`.
-2. Ingest a PDF and one URL with `/ingest/documents`.
-3. Run text question through `/query` and inspect citations.
-4. Run multi-agent execution through `/agents/run` and inspect trace.
-5. Run `/vision/analyze` on sample image.
-6. Run `/video/analyze` on sample short video.
-7. Fetch `/metrics` and present latency/cost/accuracy summary.
+1. Start backend service and validate `/health`.
+2. Launch Streamlit frontend and review the architecture diagram.
+3. Ingest a PDF and one URL with `/ingest/documents`.
+4. Run text question through `/query` and inspect citations.
+5. Run multi-agent execution through `/agents/run` and inspect trace.
+6. Run `/vision/analyze` on sample image.
+7. Run `/video/analyze` on sample short video.
+8. Fetch `/metrics` and present latency/cost/accuracy summary.
 
 ## 6. Suggested Execution Rhythm
 - One milestone per branch.

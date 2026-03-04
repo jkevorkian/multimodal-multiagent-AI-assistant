@@ -21,14 +21,14 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: documents startup flow and repository context.
 
 `requirements.txt`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
 - Theoretical role: minimal dependency manifest for quick bootstrap.
-- Technical/practical role: provides base package list for lightweight environment setup.
+- Technical/practical role: provides base package list for backend plus Streamlit frontend runtime.
 
 `pyproject.toml`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
 - Theoretical role: canonical packaging and tooling configuration.
-- Technical/practical role: declares runtime/dev dependencies and pytest defaults.
+- Technical/practical role: declares runtime/dev dependencies and pytest defaults, including frontend packages.
 
 `docs/01-requirements.md`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -36,12 +36,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: defines FR/NFR testable requirements and boundaries.
 
 `docs/02-implementation-roadmap.md`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
 - Theoretical role: milestone planning artifact for incremental delivery.
 - Technical/practical role: defines objectives, outputs, risks, and DoD per milestone.
 
 `docs/03-didactic-traceability.md`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
 - Theoretical role: learning/decision narrative over implementation lifecycle.
 - Technical/practical role: stores didactic cards, decision log, and troubleshooting heuristics.
 
@@ -166,9 +166,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: implements `POST /query`.
 
 `app/api/routes/agents.py`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
-- Theoretical role: future multi-agent orchestration entrypoint contract.
-- Technical/practical role: implements `POST /agents/run` placeholder flow.
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
+- Theoretical role: multi-agent orchestration entrypoint contract.
+- Technical/practical role: implements `POST /agents/run` using orchestrator-driven role pipeline.
 
 `app/api/routes/vision.py`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -250,7 +250,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: tests ingestion flows, chunk determinism, hybrid retrieval behavior, and reranker hook behavior.
 
 `docs/04-file-traceability-by-milestone.md`
-- Milestone metadata: introduced `M1`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M1`; updated `M2.2`; status `implemented`.
 - Theoretical role: dedicated file-level traceability registry.
 - Technical/practical role: separates file mapping concerns from didactic decision narratives.
 
@@ -295,49 +295,106 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role change: remains decision/learning artifact; file-level mapping moved out.
 - Technical/practical change: references this document as the source for per-file traceability.
 
-## 5. M2 - ReAct Tools + Multi-Agent Orchestration (Planned)
+## 5. M2 - ReAct Tools + Multi-Agent Orchestration
+
+`app/agents/__init__.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: package boundary for agent orchestration components.
+- Technical/practical role: re-exports state, role agents, checkpoint store, and orchestrator.
 
 `app/agents/state.py`
-- Milestone metadata: introduced `M2`; status `planned`.
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: shared state model for multi-agent coordination.
-- Technical/practical role: defines mandatory state keys and transition payload shape.
+- Technical/practical role: tracks query, context, tool outputs, confidence, trace, and supports snapshot/restore for checkpoint resume.
 
 `app/agents/research_agent.py`
-- Milestone metadata: introduced `M2`; status `planned`.
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: evidence-gathering agent role.
-- Technical/practical role: executes retrieval/tool actions and writes research artifacts to shared state.
+- Technical/practical role: runs retrieval, selects eligible tools, and executes tool calls under timeout/retry/budget controls.
 
 `app/agents/analyst_agent.py`
-- Milestone metadata: introduced `M2`; status `planned`.
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: intermediate synthesis role.
-- Technical/practical role: transforms research outputs into analysis notes and confidence cues.
+- Technical/practical role: converts retrieval/tool artifacts into analysis notes and confidence estimate.
 
 `app/agents/answer_agent.py`
-- Milestone metadata: introduced `M2`; status `planned`.
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: final composition role.
-- Technical/practical role: generates grounded response from shared state artifacts.
+- Technical/practical role: invokes LLM with staged context to produce final answer and normalized confidence.
 
 `app/agents/orchestrator.py`
-- Milestone metadata: introduced `M2`; status `planned`.
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: control-flow coordinator for role sequencing and guardrails.
-- Technical/practical role: enforces bounded loops, transition checks, and termination policy.
-
-`app/tools/registry.py`
-- Milestone metadata: introduced `M2`; status `planned`.
-- Theoretical role: tool registration and resolution boundary.
-- Technical/practical role: maps tool IDs to executable implementations and selection policies.
-
-`app/tools/mcp_adapter.py`
-- Milestone metadata: introduced `M2`; status `planned`.
-- Theoretical role: protocol bridge between internal tool system and MCP-compliant servers.
-- Technical/practical role: converts MCP tool descriptors/invocations into internal tool registry contracts.
+- Technical/practical role: executes role pipeline, enforces max-step boundaries, saves checkpoints, and supports resume without repeating completed stages.
 
 `app/agents/checkpoint_store.py`
-- Milestone metadata: introduced `M2`; status `planned`.
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: durability boundary for long-running agent workflows.
-- Technical/practical role: persists and restores orchestration checkpoints for resume-safe execution.
+- Technical/practical role: provides null and in-memory checkpoint stores for stage snapshots and resume.
 
-## 6. M3 - Image Multimodal Path (Planned)
+`app/tools/__init__.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: tools package export boundary.
+- Technical/practical role: re-exports tool registry and MCP adapter.
+
+`app/tools/registry.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: tool registration and execution boundary.
+- Technical/practical role: resolves tool names and executes calls with timeout/retry behavior.
+
+`app/tools/mcp_adapter.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: protocol bridge between internal tool system and MCP-compliant servers.
+- Technical/practical role: defines MCP adapter seam and tool proxy contract for later transport integration.
+
+`tests/test_m2_agents.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: behavior regression suite for orchestration mechanics.
+- Technical/practical role: validates stage transitions, tool selection scenario, and timeout/retry behavior.
+
+`tests/test_m2_checkpoint_resume.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: resilience regression suite for checkpoint recovery.
+- Technical/practical role: validates resume flow avoids repeated completed tool calls.
+
+`app/api/routes/agents.py`
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
+- Theoretical role change: transitions from placeholder endpoint to true orchestration entrypoint.
+- Technical/practical change: delegates `/agents/run` to orchestrator with configurable tool budget and step limits.
+
+`app/core/dependencies.py`
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
+- Theoretical role change: expands service container to include orchestrator runtime dependencies.
+- Technical/practical change: wires tool registry, role agents, checkpoint store, and orchestrator into dependency graph.
+
+`app/core/config.py`
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
+- Theoretical role change: now includes orchestration controls in runtime policy surface.
+- Technical/practical change: adds M2 settings for max steps, tool budget, timeout/retries, retrieval top-k, and checkpoint resume policy.
+
+## 6. M2.2 - Streamlit Frontend + Architecture Visualization
+
+`frontend/__init__.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Theoretical role: package boundary marker for frontend artifacts.
+- Technical/practical role: enables importable frontend architecture helpers and app modules.
+
+`frontend/architecture.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Theoretical role: architecture communication artifact.
+- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets used by Streamlit.
+
+`frontend/streamlit_app.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Theoretical role: human-facing interaction boundary for backend workflows.
+- Technical/practical role: renders architecture diagram and exposes route-level forms for `/health`, `/ingest/documents`, `/query`, `/agents/run`, and `/metrics`.
+
+`tests/test_frontend_architecture.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Theoretical role: regression guard for architecture communication outputs.
+- Technical/practical role: verifies key DOT nodes and explanatory flow points exist.
+
+## 7. M3 - Image Multimodal Path (Planned)
 
 `app/vision/preprocess.py`
 - Milestone metadata: introduced `M3`; status `planned`.
@@ -354,7 +411,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: multimodal fusion boundary between visual and textual evidence.
 - Technical/practical role: merges visual findings into answer-generation context.
 
-## 7. M4 - Video MVP Path (Planned)
+## 8. M4 - Video MVP Path (Planned)
 
 `app/video/frame_sampler.py`
 - Milestone metadata: introduced `M4`; status `planned`.
@@ -371,7 +428,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: provider abstraction realization for video inference.
 - Technical/practical role: coordinates frame/video analysis and normalizes event outputs.
 
-## 8. M5 - Production Hardening (Planned)
+## 9. M5 - Production Hardening (Planned)
 
 `app/core/retry.py`
 - Milestone metadata: introduced `M5`; status `planned`.
@@ -393,7 +450,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: error taxonomy boundary across application layers.
 - Technical/practical role: standardizes exception types and API error mapping.
 
-## 9. M6 - Evaluation and Deployment (Planned)
+## 10. M6 - Evaluation and Deployment (Planned)
 
 `evaluation/runner.py`
 - Milestone metadata: introduced `M6`; status `planned`.
@@ -425,7 +482,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: local deployment topology artifact.
 - Technical/practical role: composes service and infrastructure for reproducible runs.
 
-## 10. Update Protocol
+## 11. Update Protocol
 - Add each new file under the milestone where it is first introduced.
 - When behavior changes materially, update the file's milestone metadata and description.
 - Keep `docs/03-didactic-traceability.md` focused on decisions and learning rationale; keep file mapping in this document.

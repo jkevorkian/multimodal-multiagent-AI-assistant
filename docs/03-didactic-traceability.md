@@ -14,6 +14,7 @@ This document explains learning intent and technical reasoning during implementa
 | M0 | Architecture shell | Interfaces, dependency inversion, schema-first APIs, structured logging | FastAPI, Pydantic, Python typing |
 | M1 | Text RAG | Chunking, neural embeddings, hybrid retrieval, reranking, retrieval grounding | PostgreSQL, PGVector, neural embedding adapters, rank fusion |
 | M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops, durable checkpoints | LangGraph, MCP tool adapters, tool registry patterns |
+| M2.2 | Frontend architecture visibility | API contract usability, architecture communication, backend/frontend coupling boundaries | Streamlit, Graphviz DOT, HTTP API clients |
 | M3 | Image path | Input preprocessing, multimodal inference, evidence fusion | Vision model adapters |
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
 | M5 | Hardening | Retry strategy, caching layers, model routing, error taxonomy | Async IO, resilient API patterns |
@@ -62,13 +63,34 @@ PGVector inside PostgreSQL keeps vectors and metadata in one store, while provid
 
 ## M2 - ReAct + Multi-agent
 ### How it works
-A shared state object is passed through role-specific agents (research, analyst, answer). Agents call tools when needed and write intermediate artifacts to state.
+A shared `AgentState` flows through role-specific agents (`ResearchAgent`, `AnalystAgent`, `AnswerAgent`) coordinated by `AgentOrchestrator`. Tool calls are routed through `ToolRegistry` with timeout/retry guards, and checkpoints are persisted after each stage for resume-safe execution.
 
 ### Why it works
-Role decomposition narrows each reasoning step, improving controllability and debugging compared with one monolithic prompt.
+Role decomposition narrows each reasoning step, while explicit state snapshots and bounded tool budgets make failures diagnosable and recovery predictable.
 
 ### Why this technology fits
-LangGraph provides explicit control flow and state transitions, which are ideal for traceable multi-agent pipelines.
+An orchestrator + state-machine pattern keeps M2 implementation lightweight while preserving the same control-flow concepts needed for future LangGraph migration.
+
+### M2 implementation notes
+- Stage order is explicit and test-covered: `research_agent -> analyst_agent -> answer_agent`.
+- Tool calls are bounded by configurable budget, timeout, and retry limits.
+- Resume behavior reuses checkpoints and skips already-completed stages to avoid duplicate tool execution.
+- MCP adapter boundary is introduced as an integration seam (`mcp_adapter.py`) without forcing transport/runtime coupling yet.
+
+## M2.2 - Streamlit Frontend + Architecture Visualization
+### How it works
+A Streamlit UI calls existing backend routes directly and renders a Graphviz DOT architecture diagram that maps core components (frontend, API, orchestration, RAG, multimodal routes, observability).
+
+### Why it works
+Keeping one tab per route makes API contracts inspectable by humans while preserving the same backend behavior already validated by tests.
+
+### Why this technology fits
+Streamlit allows a low-friction teaching UI without introducing a heavy frontend framework during backend milestone progression.
+
+### M2.2 implementation notes
+- Frontend scope is intentionally thin: it reuses existing endpoints and adds no new backend logic.
+- Architecture description is centralized in `frontend/architecture.py` for reuse and testability.
+- A frontend helper test validates diagram content and flow explanation presence.
 
 ## M3 - Image Multimodal
 ### How it works
@@ -224,6 +246,47 @@ Use this entry template for every major decision:
 - Observed outcome: Qdrant adapter plus fallback store implemented and covered by adapter tests; full suite remains green.
 - Would we choose it again?: yes.
 - Affected modules: `app/storage/qdrant_store.py`, `app/storage/fallback_vector_store.py`, `app/core/config.py`, `app/core/dependencies.py`, `tests/test_vector_store_fallback.py`.
+
+- Date: 2026-03-04
+- Milestone: M2
+- Context: Needed to replace placeholder `/agents/run` behavior with observable multi-agent orchestration while keeping deterministic tests.
+- Decision: implement an explicit orchestrator with role agents, registry-based tool execution, and checkpoint resume that skips completed stages.
+- Alternatives considered: single monolithic agent prompt, direct LangGraph dependency in M2.
+- Why chosen: provides clear state transitions and debugging hooks with minimal runtime complexity.
+- Expected impact: predictable orchestration behavior, bounded tool execution, and safer continuation after partial runs.
+- Observed outcome: M2 tests cover stage transitions, tool selection, timeout/retry, and checkpoint resume idempotency; suite remains green.
+- Would we choose it again?: yes.
+- Affected modules: `app/agents/*`, `app/tools/registry.py`, `app/tools/mcp_adapter.py`, `app/api/routes/agents.py`, `app/core/dependencies.py`, `app/core/config.py`, `tests/test_m2_agents.py`, `tests/test_m2_checkpoint_resume.py`.
+
+- Date: 2026-03-04
+- Milestone: M2.2
+- Context: Backend milestones became harder to explain quickly to new reviewers without a visual system map and interactive route surface.
+- Decision: add a Streamlit frontend with architecture diagram + route playground instead of waiting for a full product UI milestone.
+- Alternatives considered: keep API-only flow, build a React frontend now.
+- Why chosen: fastest path to improve explainability and learning feedback with minimal coupling risk.
+- Expected impact: easier onboarding/review and clearer communication of module boundaries.
+- Observed outcome: architecture can be inspected visually and core backend routes are callable from one UI.
+- Would we choose it again?: yes.
+- Affected modules: `frontend/streamlit_app.py`, `frontend/architecture.py`, `tests/test_frontend_architecture.py`, `requirements.txt`, `pyproject.toml`.
+
+### What Changed in Understanding (M2)
+- Durable orchestration value appears earlier than expected: checkpointing is useful even before distributed execution.
+- Tool reliability controls (timeout + retry + budget) are first-class orchestration concerns, not auxiliary utilities.
+- A protocol adapter boundary (MCP) can be added incrementally without blocking core orchestration delivery.
+
+### What Failed and How It Was Fixed (M2)
+- Failure: early orchestrator draft could rebuild from checkpoint but still risk rerunning previously completed stages.
+- Fix: resume path now reconstructs `AgentState` from snapshot and skips stages already present in `steps`, preventing repeated tool calls.
+- Verification: `test_checkpoint_resume_avoids_repeating_completed_tool_calls` confirms no duplicate tool execution during resume.
+
+### What Changed in Understanding (M2.2)
+- A lightweight frontend can be introduced without violating milestone isolation if it only consumes stable backend contracts.
+- Architecture communication deserves explicit code artifacts (`architecture.py`), not only markdown prose.
+
+### What Failed and How It Was Fixed (M2.2)
+- Failure: route-level understanding was fragmented across files and difficult to present in one narrative.
+- Fix: added a single architecture diagram plus route tabs in Streamlit that mirrors real backend entrypoints.
+- Verification: `test_frontend_architecture.py` checks key diagram elements and explanatory flow points.
 
 ## 7. Common Failure Modes and Debugging Heuristics
 
