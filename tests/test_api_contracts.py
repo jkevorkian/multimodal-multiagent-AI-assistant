@@ -15,6 +15,7 @@ def test_required_routes_registered() -> None:
         "/ingest/documents",
         "/query",
         "/agents/run",
+        "/agents/tools",
         "/vision/analyze",
         "/video/analyze",
         "/metrics",
@@ -62,6 +63,26 @@ def test_agents_contract() -> None:
     assert "steps" in payload
     assert "tool_calls" in payload
     assert "trace" in payload
+
+
+def test_agents_tools_contract() -> None:
+    response = client.get("/agents/tools")
+    payload = response.json()
+    assert response.status_code == 200
+    assert "tools" in payload
+    assert isinstance(payload["tools"], list)
+    assert payload["tools"]
+    first = payload["tools"][0]
+    assert "name" in first
+    assert "description" in first
+
+
+def test_agents_contract_defaults_to_all_tools_when_omitted() -> None:
+    response = client.post("/agents/run", json={"query": "Analyze this"})
+    payload = response.json()
+    assert response.status_code == 200
+    assert "tool_calls" in payload
+    assert isinstance(payload["tool_calls"], list)
 
 
 def test_vision_contract() -> None:

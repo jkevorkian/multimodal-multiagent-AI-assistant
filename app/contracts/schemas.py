@@ -53,6 +53,15 @@ class AgentRunResponse(BaseModel):
     trace: Trace
 
 
+class AgentToolInfo(BaseModel):
+    name: str
+    description: str
+
+
+class AgentToolsResponse(BaseModel):
+    tools: list[AgentToolInfo]
+
+
 class VisionRequest(BaseModel):
     image_uri: str = Field(min_length=1)
     prompt: str | None = None

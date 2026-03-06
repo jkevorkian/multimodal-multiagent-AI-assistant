@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 
-from app.contracts.schemas import AgentRunRequest, AgentRunResponse, Trace
+from app.contracts.schemas import AgentRunRequest, AgentRunResponse, AgentToolInfo, AgentToolsResponse, Trace
 from app.core.config import settings
 from app.core.dependencies import ServiceContainer, get_container
 
@@ -13,6 +13,7 @@ async def run_agents(
     request: Request,
     container: ServiceContainer = Depends(get_container),
 ) -> AgentRunResponse:
+    # If tools are omitted (or an empty list is provided), enable all registered tools.
     enabled_tools = payload.tools or container.tool_registry.list_tools()
     orchestration_state = await container.orchestrator.run(
         query=payload.query,
@@ -29,3 +30,11 @@ async def run_agents(
         confidence=orchestration_state.confidence,
         trace=Trace(request_id=request.state.request_id, trace_id=request.state.trace_id),
     )
+
+
+@router.get("/agents/tools", response_model=AgentToolsResponse)
+async def list_agent_tools(
+    container: ServiceContainer = Depends(get_container),
+) -> AgentToolsResponse:
+    tools = [AgentToolInfo(**tool) for tool in container.tool_registry.describe_tools()]
+    return AgentToolsResponse(tools=tools)

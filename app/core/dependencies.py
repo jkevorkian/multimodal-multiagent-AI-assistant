@@ -13,37 +13,16 @@ from app.agents import (
 )
 from app.core.config import settings
 from app.interfaces import EmbeddingClient, LLMClient, Reranker, Retriever, Tool, VectorStore, VideoClient, VisionClient
+from app.llm import build_llm_client
+from app.multimodal import build_multimodal_clients
 from app.rag import DocumentIngestionService, TextRAGRetriever, build_embedding_client, build_reranker
 from app.storage import FallbackVectorStore, PgVectorStore, QdrantVectorStore
 from app.tools import ToolRegistry
 
 
-class GroundedLLMClient:
-    async def generate(self, prompt: str, context: list[str] | None = None) -> str:
-        if not context:
-            return "I do not have indexed context yet. Ingest documents first."
-        top_context = " ".join(segment.strip() for segment in context[:2] if segment.strip())
-        return f"Grounded answer for '{prompt}': {top_context}"
-
-
-class StubVisionClient:
-    async def analyze_image(self, image_uri: str, prompt: str | None = None) -> str:
-        return f"Stub vision analysis for {image_uri}"
-
-
-class StubVideoClient:
-    async def analyze_video(
-        self,
-        video_uri: str,
-        prompt: str | None = None,
-        sample_fps: float = 1.0,
-        max_frames: int = 32,
-    ) -> str:
-        return f"Stub video analysis for {video_uri}"
-
-
 class StubTool:
     name = "stub_tool"
+    description = "Demo placeholder tool that echoes request metadata."
 
     async def run(self, payload: dict) -> dict:
         return {"status": "ok", "payload": payload}
@@ -63,16 +42,37 @@ class ServiceContainer:
     tool_registry: ToolRegistry
     orchestrator: AgentOrchestrator
     embedding_provider: str
+    llm_provider: str
     reranker_provider: str
+    multimodal_provider: str
     vector_store_provider: str
 
 
 def build_service_container(database_url: str | None = None) -> ServiceContainer:
+    return _build_service_container_internal(database_url=database_url)
+
+
+def _build_service_container_internal(
+    database_url: str | None = None,
+    *,
+    embedding_provider_override: str | None = None,
+    llm_provider_override: str | None = None,
+    multimodal_provider_override: str | None = None,
+    disable_external_api: bool = False,
+) -> ServiceContainer:
+    embedding_provider = embedding_provider_override or settings.rag_embedding_provider
+    llm_provider = llm_provider_override or settings.llm_provider
+    multimodal_provider = multimodal_provider_override or settings.multimodal_provider
+    rag_openai_api_key = None if disable_external_api else settings.rag_openai_api_key
+    llm_api_key = None if disable_external_api else (settings.llm_api_key or rag_openai_api_key)
+    multimodal_api_key = None if disable_external_api else (settings.multimodal_api_key or llm_api_key or rag_openai_api_key)
+
     embedding_selection = build_embedding_client(
-        provider=settings.rag_embedding_provider,
+        provider=embedding_provider,
         model_name=settings.rag_embedding_model,
         sentence_transformer_model=settings.rag_sentence_transformer_model,
-        api_key=settings.rag_openai_api_key,
+        api_key=rag_openai_api_key,
+        base_url=None if disable_external_api else settings.rag_openai_base_url,
         deterministic_dimensions=settings.rag_embedding_dimensions,
         requested_dimensions=settings.rag_requested_embedding_dimensions,
     )
@@ -109,12 +109,23 @@ def build_service_container(database_url: str | None = None) -> ServiceContainer
             )
             vector_store_provider = "qdrant+pgvector"
 
+    multimodal_selection = build_multimodal_clients(
+        provider=multimodal_provider,
+        vision_model=settings.multimodal_vision_model,
+        api_key=multimodal_api_key,
+        base_url=None if disable_external_api else settings.multimodal_base_url,
+    )
+
     ingestion = DocumentIngestionService(
         embedding_client=embeddings,
         vector_store=vector_store,
         chunk_size=settings.rag_chunk_size,
         chunk_overlap=settings.rag_chunk_overlap,
         max_source_bytes=settings.rag_max_source_bytes,
+        vision_client=multimodal_selection.vision,
+        video_client=multimodal_selection.video,
+        video_sample_fps=settings.multimodal_video_sample_fps,
+        video_max_frames=settings.multimodal_video_max_frames,
     )
     retriever = TextRAGRetriever(
         embedding_client=embeddings,
@@ -135,7 +146,15 @@ def build_service_container(database_url: str | None = None) -> ServiceContainer
         tool_retries=settings.agent_tool_retries,
     )
     checkpoint_store = InMemoryCheckpointStore() if settings.agent_checkpoint_enabled else NullCheckpointStore()
-    llm = GroundedLLMClient()
+    llm_selection = build_llm_client(
+        provider=llm_provider,
+        model_name=settings.llm_model,
+        api_key=llm_api_key,
+        base_url=None if disable_external_api else settings.llm_base_url,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+    )
+    llm = llm_selection.client
     answer_agent = AnswerAgent(llm=llm)
     orchestrator = AgentOrchestrator(
         research_agent=research_agent,
@@ -152,13 +171,15 @@ def build_service_container(database_url: str | None = None) -> ServiceContainer
         retriever=retriever,
         vector_store=vector_store,
         ingestion=ingestion,
-        vision=StubVisionClient(),
-        video=StubVideoClient(),
+        vision=multimodal_selection.vision,
+        video=multimodal_selection.video,
         tools=tools,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
         embedding_provider=embedding_selection.provider_name,
+        llm_provider=llm_selection.provider_name,
         reranker_provider=reranker_selection.provider_name,
+        multimodal_provider=multimodal_selection.provider_name,
         vector_store_provider=vector_store_provider,
     )
 
@@ -169,4 +190,10 @@ def get_container() -> ServiceContainer:
 
 
 def create_test_container() -> ServiceContainer:
-    return build_service_container(database_url="")
+    return _build_service_container_internal(
+        database_url="",
+        embedding_provider_override="deterministic",
+        llm_provider_override="heuristic",
+        multimodal_provider_override="heuristic",
+        disable_external_api=True,
+    )

@@ -23,12 +23,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `requirements.txt`
 - Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
 - Theoretical role: minimal dependency manifest for quick bootstrap.
-- Technical/practical role: provides base package list for backend plus Streamlit frontend runtime.
+- Technical/practical role: provides base package list for backend, LangGraph orchestration, and Streamlit frontend runtime (including clipboard paste support).
 
 `pyproject.toml`
-- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: canonical packaging and tooling configuration.
-- Technical/practical role: declares runtime/dev dependencies and pytest defaults, including frontend packages.
+- Technical/practical role: declares runtime/dev dependencies and pytest defaults, including LangGraph and provider clients.
 
 `docs/01-requirements.md`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -36,14 +36,19 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: defines FR/NFR testable requirements and boundaries.
 
 `docs/02-implementation-roadmap.md`
-- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: milestone planning artifact for incremental delivery.
 - Technical/practical role: defines objectives, outputs, risks, and DoD per milestone.
 
 `docs/03-didactic-traceability.md`
-- Milestone metadata: introduced `M0`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: learning/decision narrative over implementation lifecycle.
 - Technical/practical role: stores didactic cards, decision log, and troubleshooting heuristics.
+
+`docs/07-local-model-backends.md`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: deployment/options guidance for local and self-hosted model backends.
+- Technical/practical role: documents OpenAI-compatible local endpoint profiles (Ollama/vLLM), container setup, and `.env` wiring.
 
 ### 3.2 Application Composition Root
 `app/__init__.py`
@@ -63,9 +68,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: groups config/logging/dependency modules under `app.core`.
 
 `app/core/config.py`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: centralized environment-driven configuration contract.
-- Technical/practical role: defines `Settings`, including app and RAG tuning parameters.
+- Technical/practical role: defines `Settings`, including app, RAG, agent, LLM-provider, and multimodal tuning parameters.
 
 `app/core/logging.py`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -73,9 +78,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: configures JSON logging and injects request/trace IDs.
 
 `app/core/dependencies.py`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: dependency inversion entrypoint between API and services.
-- Technical/practical role: builds and provides `ServiceContainer` for endpoint dependencies.
+- Technical/practical role: builds and provides `ServiceContainer` for endpoint dependencies, including LLM and multimodal client selection.
 
 ### 3.4 API Contracts
 `app/contracts/__init__.py`
@@ -84,9 +89,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: keeps request/response contract modules isolated.
 
 `app/contracts/schemas.py`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
 - Theoretical role: schema-first API contract.
-- Technical/practical role: defines request/response models and validation constraints.
+- Technical/practical role: defines request/response models and validation constraints, including agent-tool catalog response types.
 
 ### 3.5 Provider Abstraction Interfaces
 `app/interfaces/__init__.py`
@@ -168,17 +173,17 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/api/routes/agents.py`
 - Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
 - Theoretical role: multi-agent orchestration entrypoint contract.
-- Technical/practical role: implements `POST /agents/run` using orchestrator-driven role pipeline.
+- Technical/practical role: implements `POST /agents/run` using orchestrator-driven role pipeline and `GET /agents/tools` for tool discovery.
 
 `app/api/routes/vision.py`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: image multimodal entrypoint contract.
-- Technical/practical role: implements `POST /vision/analyze` placeholder flow.
+- Technical/practical role: implements `POST /vision/analyze` using active vision client output with structured finding extraction.
 
 `app/api/routes/video.py`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role: video multimodal entrypoint contract.
-- Technical/practical role: implements `POST /video/analyze` placeholder flow.
+- Technical/practical role: implements `POST /video/analyze` using active video client output with structured key-event extraction.
 
 `app/api/routes/metrics.py`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -187,9 +192,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 
 ### 3.7 Test Layer
 `tests/test_api_contracts.py`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
 - Theoretical role: contract-level regression guard.
-- Technical/practical role: validates route presence, response schema shape, and trace headers.
+- Technical/practical role: validates route presence (including `/agents/tools`), response schema shape, and trace headers.
 
 ## 4. M1 - Text RAG Baseline
 
@@ -205,14 +210,14 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: defines chunk dataclass and overlap-based splitting logic.
 
 `app/rag/embeddings.py`
-- Milestone metadata: introduced `M1`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M1`; updated `M3`; status `implemented`.
 - Theoretical role: embedding engine for semantic similarity.
-- Technical/practical role: implements pluggable embedding adapters (deterministic, OpenAI, SentenceTransformers), batch embedding support, and cosine similarity.
+- Technical/practical role: implements pluggable embedding adapters (deterministic, OpenAI, SentenceTransformers), batch embedding support, OpenAI-compatible base-url routing, and cosine similarity.
 
 `app/rag/ingestion.py`
-- Milestone metadata: introduced `M1`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M1`; updated `M3`; status `implemented`.
 - Theoretical role: ingestion orchestration boundary for document indexing.
-- Technical/practical role: loads URL/file sources, extracts text, chunks, embeds, and upserts metadata.
+- Technical/practical role: loads text/image/video sources, routes multimodal analysis when needed, chunks descriptors, embeds, and upserts modality-aware metadata.
 
 `app/rag/retriever.py`
 - Milestone metadata: introduced `M1`; updated `M1`; status `implemented`.
@@ -250,7 +255,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: tests ingestion flows, chunk determinism, hybrid retrieval behavior, and reranker hook behavior.
 
 `docs/04-file-traceability-by-milestone.md`
-- Milestone metadata: introduced `M1`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M1`; updated `M3`; status `implemented`.
 - Theoretical role: dedicated file-level traceability registry.
 - Technical/practical role: separates file mapping concerns from didactic decision narratives.
 
@@ -271,9 +276,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical change: adds BM25-like lexical scoring in memory and PostgreSQL full-text ranking path.
 
 `app/contracts/schemas.py`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
 - Theoretical role change: extends API contract to expose indexing result granularity.
-- Technical/practical change: adds `indexed_chunks` to ingest response.
+- Technical/practical change: adds `indexed_chunks` to ingest response and agent-tool catalog models.
 
 `app/api/routes/ingest.py`
 - Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
@@ -286,9 +291,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical change: executes retrieval over indexed chunks and returns chunk-level citations.
 
 `tests/test_api_contracts.py`
-- Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
-- Theoretical role change: contract checks now cover M1 ingest output semantics.
-- Technical/practical change: ingest test validates non-zero indexed chunk count for fixture data.
+- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
+- Theoretical role change: contract checks now cover M1 ingest output plus M2 agent catalog behavior.
+- Technical/practical change: ingest test validates non-zero indexed chunk count; agent tests validate `/agents/tools` and default tool-selection behavior.
 
 `docs/03-didactic-traceability.md`
 - Milestone metadata: introduced `M0`; updated `M1`; status `implemented`.
@@ -325,7 +330,17 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/agents/orchestrator.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: control-flow coordinator for role sequencing and guardrails.
-- Technical/practical role: executes role pipeline, enforces max-step boundaries, saves checkpoints, and supports resume without repeating completed stages.
+- Technical/practical role: executes role pipeline on LangGraph `StateGraph`, enforces max-step boundaries, saves checkpoints, and supports resume without repeating completed stages.
+
+`app/llm/__init__.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: package boundary for LLM-provider selection utilities.
+- Technical/practical role: exports LLM builder contract for container wiring.
+
+`app/llm/clients.py`
+- Milestone metadata: introduced `M2`; updated `M3`; status `implemented`.
+- Theoretical role: provider abstraction realization for answer synthesis.
+- Technical/practical role: selects OpenAI or heuristic grounded generation client based on runtime settings, including OpenAI-compatible local endpoint routing via base URL.
 
 `app/agents/checkpoint_store.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
@@ -340,7 +355,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/tools/registry.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: tool registration and execution boundary.
-- Technical/practical role: resolves tool names and executes calls with timeout/retry behavior.
+- Technical/practical role: resolves tool names, exposes discoverable tool descriptions, and executes calls with timeout/retry behavior.
 
 `app/tools/mcp_adapter.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
@@ -360,17 +375,17 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/api/routes/agents.py`
 - Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
 - Theoretical role change: transitions from placeholder endpoint to true orchestration entrypoint.
-- Technical/practical change: delegates `/agents/run` to orchestrator with configurable tool budget and step limits.
+- Technical/practical change: delegates `/agents/run` to orchestrator with configurable tool budget and step limits, and adds `/agents/tools` discovery endpoint.
 
 `app/core/dependencies.py`
-- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
-- Theoretical role change: expands service container to include orchestrator runtime dependencies.
-- Technical/practical change: wires tool registry, role agents, checkpoint store, and orchestrator into dependency graph.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Theoretical role change: expands service composition beyond orchestration into LLM/multimodal provider selection.
+- Technical/practical change: wires tool registry, role agents, checkpoint store, LangGraph orchestrator runtime, provider-based LLM selection, and multimodal clients.
 
 `app/core/config.py`
-- Milestone metadata: introduced `M0`; updated `M2`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
 - Theoretical role change: now includes orchestration controls in runtime policy surface.
-- Technical/practical change: adds M2 settings for max steps, tool budget, timeout/retries, retrieval top-k, and checkpoint resume policy.
+- Technical/practical change: adds M2 settings for orchestration plus runtime knobs for LLM/multimodal providers.
 
 ## 6. M2.2 - Streamlit Frontend + Architecture Visualization
 
@@ -380,36 +395,71 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: enables importable frontend architecture helpers and app modules.
 
 `frontend/architecture.py`
-- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
 - Theoretical role: architecture communication artifact.
-- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets used by Streamlit.
+- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets, including LangGraph, tool discovery endpoint, and multimodal preprocessing details.
 
 `frontend/streamlit_app.py`
-- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
 - Theoretical role: human-facing interaction boundary for backend workflows.
-- Technical/practical role: renders architecture diagram and exposes route-level forms for `/health`, `/ingest/documents`, `/query`, `/agents/run`, and `/metrics`.
+- Technical/practical role: renders architecture diagram, adds user-friendly implementation flow tab, preserves route-level playground forms, discovers tools through `/agents/tools`, and supports clipboard image paste ingestion.
 
 `tests/test_frontend_architecture.py`
-- Milestone metadata: introduced `M2.2`; updated `M2.2`; status `implemented`.
+- Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
 - Theoretical role: regression guard for architecture communication outputs.
-- Technical/practical role: verifies key DOT nodes and explanatory flow points exist.
+- Technical/practical role: verifies key DOT nodes (including multimodal and LLM layers) and explanatory flow points exist.
 
-## 7. M3 - Image Multimodal Path (Planned)
+## 7. M3 - Image Multimodal Path
+
+`app/vision/__init__.py`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: package boundary for vision pipeline modules.
+- Technical/practical role: exports preprocess/adapter/fusion components for route and service wiring.
+
+`app/multimodal/__init__.py`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: package boundary for multimodal client adapters.
+- Technical/practical role: exports multimodal client builder and selection types.
+
+`app/multimodal/clients.py`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: adapter layer for image/video analysis providers.
+- Technical/practical role: provides OpenAI-backed vision analysis with heuristic fallbacks, OpenAI-compatible base-url routing, and local-file image serialization to data URLs.
+
+`tests/test_llm_and_multimodal_ingestion.py`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: regression suite for provider fallback and multimodal ingestion behavior.
+- Technical/practical role: validates LLM auto fallback, OpenAI-compatible local endpoint wiring, local-file vision payload serialization, and image/video ingestion indexing with modality metadata.
+
+`deployment/docker-compose.ollama.yml`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: local inference infrastructure artifact.
+- Technical/practical role: defines base CPU-compatible Ollama topology; GPU enablement is layered via `deployment/docker-compose.ollama.gpu.yml`.
+
+`deployment/docker-compose.ollama.gpu.yml`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: hardware acceleration override artifact.
+- Technical/practical role: augments the base Ollama compose profile with GPU device reservations.
 
 `app/vision/preprocess.py`
-- Milestone metadata: introduced `M3`; status `planned`.
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
 - Theoretical role: preprocessing boundary for image quality normalization.
-- Technical/practical role: validates image input and prepares payloads for inference.
+- Technical/practical role: validates URI/type/size, resolves webpage URLs to concrete image assets when possible, normalizes local/remote inputs, and emits deterministic image metadata.
 
 `app/vision/adapter.py`
-- Milestone metadata: introduced `M3`; status `planned`.
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
 - Theoretical role: provider abstraction realization for vision inference.
-- Technical/practical role: invokes vision-capable client and normalizes provider-specific output.
+- Technical/practical role: orchestrates preprocess + provider call and returns structured analysis artifact.
 
 `app/vision/fusion.py`
-- Milestone metadata: introduced `M3`; status `planned`.
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
 - Theoretical role: multimodal fusion boundary between visual and textual evidence.
-- Technical/practical role: merges visual findings into answer-generation context.
+- Technical/practical role: builds evidence-tagged findings and confidence from analysis output.
+
+`tests/test_m3_vision.py`
+- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Theoretical role: multimodal endpoint quality and validation regression suite.
+- Technical/practical role: verifies deterministic fixture handling, type/size validation, and evidence-grounded `/vision/analyze` output.
 
 ## 8. M4 - Video MVP Path (Planned)
 

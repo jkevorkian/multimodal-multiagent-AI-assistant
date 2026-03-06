@@ -1,133 +1,153 @@
 # multimodal-multiagent-AI-assistant
 
-Objective:
+Multimodal assistant with:
+- Text RAG ingestion/query
+- Multi-agent orchestration (LangGraph)
+- Vision and video endpoints
+- Streamlit frontend for end-to-end usage
 
-AI assistant sytem which can:
--Consult documents
--Answer questions (RAG)
--Use tools (ReAct)
--Has multiple agents
--Supports image, text and video processing and understanding.
+## Stack
+- Backend: FastAPI
+- Orchestration: LangGraph
+- Frontend: Streamlit
+- Vector store: pgvector (default) or Qdrant
+- Model providers: heuristic fallback, OpenAI, or local OpenAI-compatible servers (Ollama/vLLM)
 
+## 1. Prerequisites
+- Python 3.11+
+- Docker Desktop
+- NVIDIA GPU optional (recommended for local models)
 
+## 2. Install
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-Architecture:
+## 3. Create `.env`
+```powershell
+Copy-Item .env.example .env
+```
 
-Frontend (simple UI o CLI)
-        |
-FastAPI Backend
-        |
-Agent Orchestrator (LangGraph)
-        |
---------------------------------
-|        |         |           |
-RAG    Tools    Vision     Memory
-        |
-Vector DB (PGVector)
-        |
-Storage (files / DB / APIs)
+## 4. Lift Local Model Backend (Ollama, in container)
+CPU mode (no GPU passthrough):
+```powershell
+docker compose -f deployment/docker-compose.ollama.yml up -d
+```
 
+GPU mode:
+```powershell
+docker compose -f deployment/docker-compose.ollama.yml -f deployment/docker-compose.ollama.gpu.yml up -d
+```
 
+Verify active inference processor:
+```powershell
+docker exec -it mm_maa_ollama ollama ps
+```
 
+Pull at least one local text model:
+```powershell
+docker exec -it mm_maa_ollama ollama pull qwen3:4b
+```
 
-Features list:
-1. RAG pipeline (base)
+Optional local multimodal + embeddings models:
+```powershell
+docker exec -it mm_maa_ollama ollama pull llava:7b
+docker exec -it mm_maa_ollama ollama pull nomic-embed-text
+```
 
-Ingesta de documentos (PDF, web, DB)
+Set local provider config in `.env`:
+```dotenv
+MMAA_LLM_PROVIDER=openai
+MMAA_LLM_MODEL=qwen3:4b
+MMAA_LLM_BASE_URL=http://localhost:11434/v1
+MMAA_LLM_API_KEY=local-placeholder
 
-Chunking
+MMAA_RAG_EMBEDDING_PROVIDER=openai
+MMAA_RAG_EMBEDDING_MODEL=nomic-embed-text
+MMAA_RAG_OPENAI_BASE_URL=http://localhost:11434/v1
+MMAA_RAG_OPENAI_API_KEY=local-placeholder
 
-Embeddings
+MMAA_MULTIMODAL_PROVIDER=openai
+MMAA_MULTIMODAL_VISION_MODEL=llava:7b
+MMAA_MULTIMODAL_BASE_URL=http://localhost:11434/v1
+MMAA_MULTIMODAL_API_KEY=local-placeholder
+```
 
-Retrieval
+## 5. Optional: Lift Qdrant
+```powershell
+docker compose -f deployment/docker-compose.qdrant.yml up -d
+```
 
-👉 Usa PostgreSQL + JSONB + PGVector (ya estás trabajando con eso)
+If using Qdrant, set in `.env`:
+```dotenv
+MMAA_RAG_VECTOR_STORE_PROVIDER=qdrant
+MMAA_QDRANT_URL=http://localhost:6333
+MMAA_QDRANT_COLLECTION_NAME=rag_chunks
+MMAA_RAG_VECTOR_STORE_MIRROR_WRITES=true
+```
 
-2. Agent con tools (ReAct)
+## 6. Lift Backend
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-El agente decide:
+Health check:
+```powershell
+Invoke-RestMethod -Method Get -Uri http://localhost:8000/health
+```
 
-Buscar en documentos
+## 7. Lift Frontend
+In a second terminal:
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m streamlit run frontend/streamlit_app.py
+```
 
-Consultar DB
+Open:
+- Frontend: `http://localhost:8501`
+- Backend API docs: `http://localhost:8000/docs`
+- Frontend ingestion supports file upload plus clipboard image paste (`Ctrl+V`) via `streamlit-paste-button`.
 
-Llamar APIs
+Supported ingestion formats (current):
+- Documents: `pdf`, `docx`, `pptx`, `xlsx`, `txt`, `md/markdown`, `html/htm`, `csv`, `tsv`, `json/jsonl`, `yaml/yml`, `xml`, `log`, `ini`, `cfg`, `toml`
+- Media: common image/video extensions already supported by the multimodal pipeline
 
-Procesar imagen
+## 8. Minimal API Smoke Test
+Ingest a local file:
+```powershell
+$p = Join-Path $env:TEMP "mmaa_demo.txt"
+"Retention policy is 30 days for logs." | Set-Content -Path $p -Encoding UTF8
+$uri = [System.Uri]::new($p).AbsoluteUri
+$body = @{ sources = @($uri); source_type = "text" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/ingest/documents -ContentType "application/json" -Body $body
+```
 
-Ejemplo:
+Query:
+```powershell
+$body = @{ query = "What is the retention policy?"; top_k = 3 } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/query -ContentType "application/json" -Body $body
+```
 
-“¿Qué tendencia tuvo Bitcoin la última semana?”
+## 9. Stop Everything
+Stop backend/frontend terminals with `Ctrl+C`.
 
-→ consulta tu DB crypto (tu proyecto actual)
-→ responde con contexto
+Stop containers:
+```powershell
+docker compose -f deployment/docker-compose.ollama.yml down
+docker compose -f deployment/docker-compose.qdrant.yml down
+```
 
-👉 Esto conecta DIRECTO con tu proyecto de crypto
+Remove container volumes too (optional):
+```powershell
+docker compose -f deployment/docker-compose.ollama.yml down -v
+docker compose -f deployment/docker-compose.qdrant.yml down -v
+```
 
-3. Multi-agent system (LangGraph)
-
-Separar roles:
-
-Research agent (busca info)
-
-Analyst agent (interpreta)
-
-Answer agent (responde)
-
-👉 Esto es EXACTAMENTE lo que buscan
-
-4. Multimodal (tu diferencial)
-
-Ejemplo:
-
-Usuario sube imagen
-
-El sistema la analiza (CV model)
-
-LLM responde
-
-Ej:
-
-“¿Qué señales de tránsito aparecen en esta imagen?”
-
-👉 Esto conecta con tu experiencia en CSIC
-
-5. Backend productivo
-
-FastAPI
-
-Async endpoints
-
-Logging estructurado
-
-Manejo de errores
-
-Retry logic
-
-6. Evaluación
-
-Dataset de preguntas
-
-Métricas:
-
-Exactitud
-
-Latencia
-
-Costo
-
-7. Cost optimization
-
-Cache de embeddings
-
-Cache de respuestas
-
-Routing de modelos (cheap vs expensive)
-
-8. Deploy
-
-Docker
-
-Cloud (ideal Azure)
-
-Endpoint público
+## Notes
+- If you keep `auto` providers, the app can fall back to heuristic/deterministic behavior.
+- To force local model usage, explicitly set provider env vars to `openai` plus `*_BASE_URL`.
+- Local vision with `file://` image paths is supported by the multimodal adapter.
+- Vision preprocessing can resolve webpage URLs to concrete image assets before model inference.

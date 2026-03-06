@@ -35,7 +35,7 @@ This document defines what the `multimodal-multiagent-AI-assistant` must do, wha
 | FR-008 | The system shall implement multi-agent roles: Research Agent, Analyst Agent, Answer Agent. | Orchestration test verifying role execution order and shared state transitions. |
 | FR-009 | The system shall analyze images and return a textual interpretation. | API test for `/vision/analyze` using deterministic sample image. |
 | FR-010 | The system shall analyze video input using frame sampling and temporal aggregation. | API test for `/video/analyze` validating frame extraction and synthesis output. |
-| FR-011 | The system shall expose the following API endpoints: `/health`, `/ingest/documents`, `/query`, `/agents/run`, `/vision/analyze`, `/video/analyze`, `/metrics`. | Contract tests confirming endpoint availability, status codes, and schema conformance. |
+| FR-011 | The system shall expose the following API endpoints: `/health`, `/ingest/documents`, `/query`, `/agents/run`, `/agents/tools`, `/vision/analyze`, `/video/analyze`, `/metrics`. | Contract tests confirming endpoint availability, status codes, and schema conformance. |
 | FR-012 | The system shall provide evaluation outputs for accuracy, latency, and cost at run and aggregate levels. | Evaluation runner test generating per-run and summary report artifacts. |
 | FR-013 | The system shall support pluggable vector store backends with fallback coexistence (external vector DB + PostgreSQL/in-memory). | Adapter tests validating fallback behavior when primary store is unavailable. |
 
@@ -45,6 +45,7 @@ This document defines what the `multimodal-multiagent-AI-assistant` must do, wha
 - `POST /ingest/documents`
 - `POST /query`
 - `POST /agents/run`
+- `GET /agents/tools`
 - `POST /vision/analyze`
 - `POST /video/analyze`
 - `GET /metrics`
@@ -53,6 +54,7 @@ This document defines what the `multimodal-multiagent-AI-assistant` must do, wha
 - `IngestRequest`, `IngestResponse`
 - `QueryRequest`, `QueryResponse`
 - `AgentRunRequest`, `AgentRunResponse`
+- `AgentToolsResponse`
 - `VisionRequest`, `VisionResponse`
 - `VideoRequest`, `VideoResponse`
 - `MetricsResponse`

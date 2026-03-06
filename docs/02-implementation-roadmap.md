@@ -109,16 +109,20 @@ Add explicit role-based orchestration and tool routing with durable execution an
   - `app/tools/registry.py`
   - `app/tools/mcp_adapter.py`
   - `app/agents/checkpoint_store.py`
+  - `app/llm/clients.py`
 - Endpoints:
   - `/agents/run`
+  - `/agents/tools` (tool discovery for frontend/API consumers)
 - Tests:
   - State transition tests.
   - Tool-selection scenario tests.
+  - Tool catalog contract tests.
   - Tool-call idempotency tests across resume points.
   - Human-interrupt/resume tests for long-running runs.
   - Timeout/retry behavior tests.
 - Docs updates:
   - Add agent control-flow trace example, state model explanation, and MCP tool integration pattern.
+  - Document default tool behavior when `tools` is omitted and `/agents/tools` discovery endpoint.
 
 ### Risks and Mitigation
 - Risk: Unstable or looping agent behavior.
@@ -131,9 +135,11 @@ Add explicit role-based orchestration and tool routing with durable execution an
 - Multi-agent sequence executes with trace logs.
 - Tool calls are bounded and observable.
 - Runs can be resumed from checkpoints without repeating completed tool calls.
+- Orchestration runtime is backed by LangGraph while preserving existing API contract.
+- Answer synthesis uses provider-backed LLM selection (OpenAI when configured, deterministic grounded fallback otherwise).
 
 ### Implementation Status
-- Current branch status (2026-03-04): implemented and test-covered.
+- Current branch status (2026-03-04): implemented and test-covered, with LangGraph orchestration and provider-backed LLM wiring.
 
 ## M2.2 - Streamlit Frontend + Architecture Visualization
 ### Objective
@@ -149,6 +155,7 @@ Provide a lightweight UI to exercise backend routes and communicate the high-lev
   - Frontend architecture helper output test.
 - Docs updates:
   - Add M2.2 rationale and traceability entries in didactic and file-level docs.
+  - Document frontend usability features (tool multiselect via `/agents/tools`, clipboard image paste for ingest).
 
 ### Risks and Mitigation
 - Risk: frontend drifts from backend contracts.
@@ -164,6 +171,7 @@ Provide a lightweight UI to exercise backend routes and communicate the high-lev
 
 ### Implementation Status
 - Current branch status (2026-03-04): implemented in current working tree.
+- Current branch status (2026-03-05): extended with tool-discovery UX and clipboard image paste ingestion.
 
 ## M3 - Image Multimodal Path
 ### Objective
@@ -171,6 +179,8 @@ Support image analysis and integrate visual findings into answer generation with
 
 ### Outputs
 - Code modules:
+  - `app/multimodal/clients.py`
+  - `app/rag/ingestion.py` (multimodal ingestion integration)
   - `app/vision/preprocess.py`
   - `app/vision/adapter.py`
   - `app/vision/fusion.py`
@@ -192,6 +202,15 @@ Support image analysis and integrate visual findings into answer generation with
 
 ### Definition of Done
 - Image endpoint returns stable structured response with confidence and evidence summary.
+
+### Implementation Status
+- Current branch status (2026-03-04): implemented in current working tree and test-covered.
+- Delivered now:
+  - image/video source ingestion into shared vector pipeline with modality metadata
+  - vision preprocessing/adapter/fusion modules
+  - evidence-grounded `/vision/analyze` responses with validation checks
+  - webpage URL image resolution in preprocessor (meta/image extraction -> concrete image inference payload)
+  - OpenAI-compatible local endpoint routing (`base_url`) across LLM, embeddings, and multimodal adapters
 
 ## M4 - Video MVP Path
 ### Objective

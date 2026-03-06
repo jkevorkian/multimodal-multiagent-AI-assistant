@@ -13,7 +13,7 @@ This document explains learning intent and technical reasoning during implementa
 | --- | --- | --- | --- |
 | M0 | Architecture shell | Interfaces, dependency inversion, schema-first APIs, structured logging | FastAPI, Pydantic, Python typing |
 | M1 | Text RAG | Chunking, neural embeddings, hybrid retrieval, reranking, retrieval grounding | PostgreSQL, PGVector, neural embedding adapters, rank fusion |
-| M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops, durable checkpoints | LangGraph, MCP tool adapters, tool registry patterns |
+| M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops, durable checkpoints | LangGraph StateGraph, MCP tool adapters, tool registry patterns |
 | M2.2 | Frontend architecture visibility | API contract usability, architecture communication, backend/frontend coupling boundaries | Streamlit, Graphviz DOT, HTTP API clients |
 | M3 | Image path | Input preprocessing, multimodal inference, evidence fusion | Vision model adapters |
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
@@ -76,6 +76,9 @@ An orchestrator + state-machine pattern keeps M2 implementation lightweight whil
 - Tool calls are bounded by configurable budget, timeout, and retry limits.
 - Resume behavior reuses checkpoints and skips already-completed stages to avoid duplicate tool execution.
 - MCP adapter boundary is introduced as an integration seam (`mcp_adapter.py`) without forcing transport/runtime coupling yet.
+- Runtime orchestration now executes on LangGraph `StateGraph` while preserving `AgentState` and endpoint contracts.
+- LLM selection is provider-based (`auto`/`openai`/`heuristic`) and no longer hardwired to a stub class.
+- Tool discovery is exposed through `/agents/tools`, and `/agents/run` defaults to all registered tools when `tools` is omitted.
 
 ## M2.2 - Streamlit Frontend + Architecture Visualization
 ### How it works
@@ -91,16 +94,24 @@ Streamlit allows a low-friction teaching UI without introducing a heavy frontend
 - Frontend scope is intentionally thin: it reuses existing endpoints and adds no new backend logic.
 - Architecture description is centralized in `frontend/architecture.py` for reuse and testability.
 - A frontend helper test validates diagram content and flow explanation presence.
+- Agent tool selection moved from free-text input to discoverable multiselect, populated from `/agents/tools`.
+- Ingestion UX now supports clipboard image paste (`Ctrl+V`) in addition to file upload.
 
 ## M3 - Image Multimodal
 ### How it works
-Image input is validated and preprocessed, then sent to a vision-capable adapter. Extracted signals are fused into textual reasoning.
+Image and video sources can be ingested through the same indexing endpoint and transformed into textual semantic descriptors through multimodal clients before embedding and vector storage.
 
 ### Why it works
-Grounding answer generation in visual evidence reduces unsupported statements.
+Multimodal-to-text descriptors allow image/video assets to participate in the same retrieval and citation flow as text documents.
 
 ### Why this technology fits
-A vision adapter abstraction allows swapping providers while preserving endpoint contracts.
+A multimodal adapter layer keeps provider flexibility while minimizing impact on existing vector-store and retrieval contracts.
+
+### External Landscape Scan (2026-03-04)
+- Industrial VLM APIs (OpenAI, Anthropic, Google) converge on image+text prompt interfaces and production safety controls.
+- Open-source VLM research is moving toward stronger visual reasoning and dynamic resolution support (e.g., Qwen2.5-VL).
+- VLA research (RT-2, OpenVLA) reinforces that perception-to-action stacks benefit from explicit grounding interfaces and robust state handling.
+- Implementation implication for this project: keep strict adapter boundaries and emit explicit evidence tags in multimodal outputs so future VLA/tool integration can reuse grounded observations.
 
 ## M4 - Video Multimodal
 ### How it works
@@ -269,15 +280,116 @@ Use this entry template for every major decision:
 - Would we choose it again?: yes.
 - Affected modules: `frontend/streamlit_app.py`, `frontend/architecture.py`, `tests/test_frontend_architecture.py`, `requirements.txt`, `pyproject.toml`.
 
+- Date: 2026-03-04
+- Milestone: M2
+- Context: Orchestration logic was implemented as a custom linear runner, while milestone intent targeted LangGraph-ready orchestration semantics.
+- Decision: migrate orchestrator runtime to LangGraph `StateGraph` and keep `AgentState` as shared payload object.
+- Alternatives considered: keep custom pipeline, rewrite all agents around LangChain abstractions.
+- Why chosen: delivers actual graph runtime now without destabilizing current tests/contracts.
+- Expected impact: cleaner evolution path for branching/conditional agent flows and better parity with production orchestration patterns.
+- Observed outcome: stage sequencing and checkpoint-resume behavior remained stable and test-covered after migration.
+- Would we choose it again?: yes.
+- Affected modules: `app/agents/orchestrator.py`, `tests/test_m2_agents.py`, `tests/test_m2_checkpoint_resume.py`, `requirements.txt`, `pyproject.toml`.
+
+- Date: 2026-03-04
+- Milestone: M2-M3 bridge
+- Context: Ingestion path handled text/PDF/URL but excluded image/video assets from the shared retrieval index.
+- Decision: extend `DocumentIngestionService` to ingest image/video sources through multimodal clients and persist modality metadata in the same vector pipeline.
+- Alternatives considered: separate multimodal index endpoint, postpone ingestion until full M3 endpoint redesign.
+- Why chosen: enables immediate multimodal retrieval experimentation while preserving one ingestion contract.
+- Expected impact: image/video assets become retrievable evidence in `/query` and agent workflows.
+- Observed outcome: modality-tagged chunks are indexed for image/video sources and validated by automated tests.
+- Would we choose it again?: yes.
+- Affected modules: `app/rag/ingestion.py`, `app/multimodal/clients.py`, `app/core/dependencies.py`, `tests/test_llm_and_multimodal_ingestion.py`.
+
+- Date: 2026-03-04
+- Milestone: M3
+- Context: `/vision/analyze` still relied on direct client output shaping, missing explicit preprocessing and evidence-fusion modules requested by roadmap.
+- Decision: implement dedicated `VisionPreprocessor`, `VisionAdapter`, and `VisionFusion` modules and route `/vision/analyze` through this pipeline.
+- Alternatives considered: keep inline route logic, defer evidence fusion to M4.
+- Why chosen: aligns with roadmap design boundaries and provides explicit grounding now.
+- Expected impact: clearer separation of concerns, better validation, and auditable evidence references in findings.
+- Observed outcome: endpoint now validates type/size, returns evidence-tagged findings, and is covered by dedicated M3 tests.
+- Would we choose it again?: yes.
+- Affected modules: `app/vision/preprocess.py`, `app/vision/adapter.py`, `app/vision/fusion.py`, `app/api/routes/vision.py`, `tests/test_m3_vision.py`.
+
+- Date: 2026-03-04
+- Milestone: M3-M5 bridge
+- Context: Need to run fully local/self-hosted model stacks (containerized) without changing API route contracts.
+- Decision: add OpenAI-compatible `base_url` support across LLM, embedding, and multimodal adapters; accept `base_url` as alternative to API key; normalize local image file inputs to data URLs for VLM compatibility.
+- Alternatives considered: add provider-specific adapters first (`ollama`, `vllm`) and postpone shared endpoint support.
+- Why chosen: keeps provider surface minimal while enabling multiple local backends immediately through one contract.
+- Expected impact: easier local deployment on consumer GPUs and smoother switch between hosted and local providers.
+- Observed outcome: env-driven local endpoint routing now works for all three inference surfaces with automated tests.
+- Would we choose it again?: yes.
+- Affected modules: `app/llm/clients.py`, `app/rag/embeddings.py`, `app/multimodal/clients.py`, `app/core/config.py`, `app/core/dependencies.py`, `tests/test_llm_and_multimodal_ingestion.py`.
+
 ### What Changed in Understanding (M2)
 - Durable orchestration value appears earlier than expected: checkpointing is useful even before distributed execution.
 - Tool reliability controls (timeout + retry + budget) are first-class orchestration concerns, not auxiliary utilities.
 - A protocol adapter boundary (MCP) can be added incrementally without blocking core orchestration delivery.
+- Migrating to LangGraph did not require rewriting agent internals when state boundaries were already explicit.
 
 ### What Failed and How It Was Fixed (M2)
 - Failure: early orchestrator draft could rebuild from checkpoint but still risk rerunning previously completed stages.
 - Fix: resume path now reconstructs `AgentState` from snapshot and skips stages already present in `steps`, preventing repeated tool calls.
 - Verification: `test_checkpoint_resume_avoids_repeating_completed_tool_calls` confirms no duplicate tool execution during resume.
+
+### What Changed in Understanding (M3 bridge)
+- Multimodal ingestion can be introduced incrementally by converting visual/video inputs into grounded descriptors before embedding.
+- A single vector index with modality metadata is a practical bridge before full cross-modal ranking models are added.
+
+### What Changed in Understanding (M3)
+- Dedicated preprocessing/fusion stages are necessary even with strong VLMs, because production behavior depends on deterministic validation and traceable evidence formatting.
+- A user-facing multimodal endpoint should preserve raw model summary and separately expose structured findings with evidence metadata.
+- Webpage URLs frequently point to HTML instead of direct images; preprocessing should resolve concrete image assets before VLM invocation.
+
+### What Failed and How It Was Fixed (M3 bridge)
+- Failure: initial ingestion path attempted to read every source as text bytes, which does not generalize to image/video URIs.
+- Fix: ingestion now resolves modality first, then routes image/video to multimodal analysis clients and text sources to byte/text loaders.
+- Verification: `test_image_and_video_are_ingested_with_modality_metadata` confirms modality-tagged indexing for both media types.
+
+### What Failed and How It Was Fixed (M3)
+- Failure: vision request validation misclassified Windows local paths as unsupported URI schemes.
+- Fix: preprocessor now detects drive-letter paths and treats them as local files.
+- Verification: `test_vision_preprocessor_extracts_deterministic_fixture_metadata` and route-level grounding tests are green.
+
+- Failure: users often passed article URLs (HTML pages) to `/vision/analyze`, causing provider failures or degraded metadata-only responses.
+- Fix: preprocessor now resolves webpage image candidates (`og:image`, `twitter:image`, and image URLs in markup), downloads the resolved image, and forwards a concrete data URI to the vision model.
+- Verification: dedicated tests for webpage-resolution success/failure are green and real URL checks now resolve image payloads.
+
+- Date: 2026-03-05
+- Milestone: M2-M2.2 bridge
+- Context: users could not discover available tool names and had to type internal IDs manually.
+- Decision: add `GET /agents/tools` plus frontend multiselect populated from tool catalog.
+- Alternatives considered: keep free-text tools input, hardcode labels in frontend.
+- Why chosen: keeps UX simple while preserving backend tool extensibility.
+- Expected impact: fewer invalid tool names and clearer user-facing control.
+- Observed outcome: route contract and frontend now show tool names/descriptions directly.
+- Would we choose it again?: yes.
+- Affected modules: `app/api/routes/agents.py`, `app/tools/registry.py`, `app/contracts/schemas.py`, `frontend/streamlit_app.py`, `tests/test_api_contracts.py`.
+
+- Date: 2026-03-05
+- Milestone: M2.2
+- Context: many desktop workflows involve screenshot clipboard usage rather than saved files.
+- Decision: support clipboard image paste in ingestion flows using `streamlit-paste-button`.
+- Alternatives considered: upload-only flow, custom component from scratch.
+- Why chosen: fastest reliable UX improvement with low maintenance overhead.
+- Expected impact: quicker image ingestion during demos and manual testing.
+- Observed outcome: pasted images are persisted to temp and included in ingest source list.
+- Would we choose it again?: yes.
+- Affected modules: `frontend/streamlit_app.py`, `requirements.txt`, `README.md`.
+
+- Date: 2026-03-05
+- Milestone: M3
+- Context: `/vision/analyze` input commonly arrives as webpage URLs, not direct image URLs.
+- Decision: extend `VisionPreprocessor` to resolve image assets from webpage metadata/markup before inference.
+- Alternatives considered: require direct image URLs only, keep degraded-mode fallback.
+- Why chosen: improves robustness without changing endpoint contract.
+- Expected impact: fewer degraded responses and better real-world success rate.
+- Observed outcome: webpage URLs now resolve to concrete image data URIs for model calls.
+- Would we choose it again?: yes.
+- Affected modules: `app/vision/preprocess.py`, `tests/test_m3_vision.py`, `frontend/architecture.py`.
 
 ### What Changed in Understanding (M2.2)
 - A lightweight frontend can be introduced without violating milestone isolation if it only consumes stable backend contracts.

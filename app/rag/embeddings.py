@@ -55,9 +55,16 @@ class DeterministicEmbeddingClient:
 
 
 class OpenAIEmbeddingClient:
-    def __init__(self, model: str, api_key: str | None = None, dimensions: int | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        dimensions: int | None = None,
+        base_url: str | None = None,
+    ) -> None:
         self._model = model
         self._api_key = api_key
+        self._base_url = base_url
         self.dimensions = dimensions if dimensions and dimensions > 0 else _OPENAI_MODEL_DEFAULT_DIMENSIONS.get(model)
         self._client: Any | None = None
 
@@ -82,7 +89,8 @@ class OpenAIEmbeddingClient:
             from openai import AsyncOpenAI
         except Exception as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("openai package is required for OpenAI embeddings") from exc
-        self._client = AsyncOpenAI(api_key=self._api_key)
+        # Some OpenAI-compatible local servers do not enforce API keys.
+        self._client = AsyncOpenAI(api_key=self._api_key or "local-placeholder-key", base_url=self._base_url)
         return self._client
 
 
@@ -134,6 +142,7 @@ def build_embedding_client(
     model_name: str = "text-embedding-3-small",
     sentence_transformer_model: str = "BAAI/bge-small-en-v1.5",
     api_key: str | None = None,
+    base_url: str | None = None,
     deterministic_dimensions: int = 64,
     requested_dimensions: int | None = None,
 ) -> EmbeddingSelection:
@@ -148,12 +157,26 @@ def build_embedding_client(
     if normalized_provider == "openai":
         if importlib.util.find_spec("openai") is None:
             raise RuntimeError("openai package is required for openai embedding provider")
-        client = OpenAIEmbeddingClient(model=model_name, api_key=api_key, dimensions=requested_dimensions)
+        if not api_key and not base_url:
+            raise RuntimeError(
+                "embedding provider 'openai' requires MMAA_RAG_OPENAI_API_KEY or MMAA_RAG_OPENAI_BASE_URL"
+            )
+        client = OpenAIEmbeddingClient(
+            model=model_name,
+            api_key=api_key,
+            dimensions=requested_dimensions,
+            base_url=base_url,
+        )
         return EmbeddingSelection(client=client, provider_name="openai", dimensions=client.dimensions)
 
     if normalized_provider in {"auto", "neural"}:
-        if api_key and importlib.util.find_spec("openai") is not None:
-            client = OpenAIEmbeddingClient(model=model_name, api_key=api_key, dimensions=requested_dimensions)
+        if (api_key or base_url) and importlib.util.find_spec("openai") is not None:
+            client = OpenAIEmbeddingClient(
+                model=model_name,
+                api_key=api_key,
+                dimensions=requested_dimensions,
+                base_url=base_url,
+            )
             return EmbeddingSelection(client=client, provider_name="openai", dimensions=client.dimensions)
 
     if normalized_provider in {"deterministic", "hash", "auto", "neural"}:

@@ -13,6 +13,14 @@ class ToolRegistry:
     def list_tools(self) -> list[str]:
         return sorted(self._tools.keys())
 
+    def describe_tools(self) -> list[dict[str, str]]:
+        descriptions: list[dict[str, str]] = []
+        for name in self.list_tools():
+            tool = self._tools[name]
+            description = str(getattr(tool, "description", "")).strip() or "No description provided."
+            descriptions.append({"name": name, "description": description})
+        return descriptions
+
     def has_tool(self, tool_name: str) -> bool:
         return tool_name in self._tools
 

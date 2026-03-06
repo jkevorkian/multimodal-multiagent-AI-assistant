@@ -1,10 +1,14 @@
 pytest
 pydantic
+python-dotenv
 fastapi
 httpx
 streamlit
+streamlit-paste-button
 graphviz
+langgraph
 openai
+pypdf
 sentence-transformers #use "openai" package for external API embedding generation or "sentence-transformers" package for local embedding generation
 psycopg
 qdrant-client

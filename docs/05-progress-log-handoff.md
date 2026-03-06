@@ -1,116 +1,78 @@
 # 05 - Progress Log Handoff
 
 ## 1. Snapshot
-- Date: 2026-03-04
+- Date: 2026-03-05
 - Branch: `main`
-- Last pushed M1 commit: `af4cc96`
-- Working tree status: includes M2 and M2.2 implementation changes (not yet committed in this turn)
-- Last test run: `.\venv\Scripts\python -m pytest -q`
-- Test result: `26 passed, 10 warnings`
+- Current HEAD: `6b98bb0` (pre-commit snapshot in this workspace)
+- Working tree status: M2/M2.2/M3 implementation set is present with additional UX and ingestion upgrades pending commit
+- Last full test run:
+  - `.\venv\Scripts\python.exe -m pytest -q` -> `48 passed`
 
 ## 2. Milestone Status
 - M0: complete.
-- M1: complete and pushed.
-- M2: implemented in code and tests in current working tree.
-- M2.2: implemented in code and tests in current working tree.
-- M3+: not started in code.
+- M1: complete and extended.
+- M2: complete (LangGraph orchestration + tool discovery endpoint).
+- M2.2: complete (Streamlit architecture + implementation flow, route playground).
+- M3: complete and extended (vision preprocess/adapter/fusion + webpage image resolution).
+- M4+: planned.
 
-## 3. M2 Work Completed (Current Working Tree)
+## 3. Delivered Since Previous Handoff
 
-### 3.1 New Agent Modules
-- `app/agents/__init__.py`
-- `app/agents/state.py`
-- `app/agents/research_agent.py`
-- `app/agents/analyst_agent.py`
-- `app/agents/answer_agent.py`
-- `app/agents/orchestrator.py`
-- `app/agents/checkpoint_store.py`
+### 3.1 Ingestion and File Type Expansion
+- Added/validated broader document ingestion support:
+  - markdown/text-like formats
+  - `docx`, `pptx`, `xlsx`
+  - html extraction path
+- Relevant modules/tests:
+  - `app/rag/ingestion.py`
+  - `tests/test_m1_rag.py`
 
-### 3.2 New Tooling Modules
-- `app/tools/__init__.py`
-- `app/tools/registry.py`
-- `app/tools/mcp_adapter.py`
+### 3.2 Agent UX and Tool Discoverability
+- Added `GET /agents/tools` for catalog-style tool discovery.
+- `/agents/run` behavior clarified and preserved: if `tools` omitted, backend enables all registered tools.
+- Streamlit moved from manual CSV tool typing to tool multiselect populated from API catalog.
+- Relevant modules/tests:
+  - `app/api/routes/agents.py`
+  - `app/tools/registry.py`
+  - `app/contracts/schemas.py`
+  - `frontend/streamlit_app.py`
+  - `tests/test_api_contracts.py`
 
-### 3.3 Runtime Wiring Updates
-- `app/api/routes/agents.py`
-  - `/agents/run` now executes real orchestration instead of placeholder output.
-- `app/core/config.py`
-  - Added M2 settings:
-    - `MMAA_AGENT_MAX_STEPS`
-    - `MMAA_AGENT_TOOL_BUDGET`
-    - `MMAA_AGENT_TOOL_TIMEOUT_SEC`
-    - `MMAA_AGENT_TOOL_RETRIES`
-    - `MMAA_AGENT_RETRIEVAL_TOP_K`
-    - `MMAA_AGENT_CHECKPOINT_ENABLED`
-    - `MMAA_AGENT_RESUME_FROM_CHECKPOINT`
-- `app/core/dependencies.py`
-  - Service container now wires tool registry, role agents, checkpoint store, and orchestrator.
+### 3.3 Vision Robustness for Real URLs
+- Vision preprocessing now resolves webpage URLs (HTML pages) to concrete image assets when possible (`og:image`, `twitter:image`, and image links), then converts to model-ready payload.
+- Invalid pages without discoverable images now fail validation cleanly.
+- Relevant modules/tests:
+  - `app/vision/preprocess.py`
+  - `tests/test_m3_vision.py`
 
-### 3.4 M2 Behavioral Guarantees Now Implemented
-- Explicit stage flow: `research_agent -> analyst_agent -> answer_agent`.
-- Tool execution bounds:
-  - allowlist by requested tools
-  - budget limits
-  - timeout + retry guards
-- Checkpoint persistence after each stage.
-- Resume-from-checkpoint support that skips already completed stages to avoid duplicated tool calls.
+### 3.4 Frontend Ingestion UX Upgrade
+- Added clipboard image paste support (`Ctrl+V`) in Streamlit ingestion flows (Implementation + Ingest tabs) via `streamlit-paste-button`.
+- Pasted images are persisted to temp and added as `file://` sources for backend ingest.
+- Relevant modules:
+  - `frontend/streamlit_app.py`
+  - `requirements.txt`
+  - `README.md`
 
-## 4. M2 Tests Added
-- `tests/test_m2_agents.py`
-  - state transition order
-  - tool-selection scenario
-  - timeout/retry behavior
-- `tests/test_m2_checkpoint_resume.py`
-  - checkpoint resume avoids re-running completed tool stage calls
+## 4. Config and Runtime Notes
+- `.env` / `.env.example` are organized for Ollama-only OpenAI-compatible local profile.
+- Current local model defaults documented around:
+  - text model: `qwen3:4b`
+  - embedding model: `nomic-embed-text`
+  - vision model: `llava:7b`
 
-## 5. M2.2 Frontend Work Completed
-
-### 5.1 New Frontend Modules
-- `frontend/__init__.py`
-- `frontend/architecture.py`
-- `frontend/streamlit_app.py`
-
-### 5.2 Frontend Scope Implemented
-- Streamlit tabs for:
-  - architecture visualization
-  - `/health`
-  - `/ingest/documents`
-  - `/query`
-  - `/agents/run`
-  - `/metrics`
-- Architecture view renders Graphviz DOT diagram and high-level control/data flow bullets.
-
-### 5.3 M2.2 Tests Added
-- `tests/test_frontend_architecture.py`
-  - validates key nodes in architecture DOT output
-  - validates presence of high-level flow points
-
-## 6. Existing M1/Qdrant Coverage Still Present
-- `tests/test_m1_rag.py`
-- `tests/test_vector_store_fallback.py`
-- `tests/test_qdrant_live_integration.py` (integration/infra dependent)
-
-## 7. Documentation Updated in This Turn
+## 5. Documentation Updated in This Pass
+- `README.md`
+- `docs/01-requirements.md`
 - `docs/02-implementation-roadmap.md`
-  - Added M2.2 milestone with objective/outputs/DoD and updated demo sequence.
 - `docs/03-didactic-traceability.md`
-  - Added M2.2 didactic card, decision log entry, and understanding/failure notes.
 - `docs/04-file-traceability-by-milestone.md`
-  - Added M2.2 per-file entries and updated metadata for docs/dependency manifests.
+- `docs/07-local-model-backends.md`
 
-## 8. Dependency Changes in This Turn
-- `requirements.txt`
-  - added `streamlit`
-  - added `graphviz`
-- `pyproject.toml`
-  - runtime dependencies now include `httpx`, `streamlit`, and `graphviz`
+## 6. Known Caveats
+- Video endpoint is still heuristic-first in current scope; full temporal reasoning remains M4.
+- FastAPI startup deprecation warning (`on_event`) remains non-blocking.
+- Full-suite benchmark/eval artifacts remain M6 scope.
 
-## 9. Known Caveats
-- FastAPI `@app.on_event("startup")` deprecation warning remains; no runtime failure.
-- MCP adapter is an integration seam (placeholder transport behavior), not full MCP transport client yet.
-
-## 10. Suggested Next Steps for Next Agent
-1. Commit and push the M2 working-tree changes.
-2. Run Streamlit (`streamlit run frontend/streamlit_app.py`) against local API for manual review.
-3. Optionally add richer MCP transport implementation under `app/tools/mcp_adapter.py`.
-4. Begin M3 only after M2/M2.2 review is accepted.
+## 7. Suggested Immediate Next Step
+1. Commit the current integrated set with a milestone-aware message.
+2. Then plan M4 scope slice (frame sampler + temporal aggregation + tests) before entering M5 hardening/evaluation work.

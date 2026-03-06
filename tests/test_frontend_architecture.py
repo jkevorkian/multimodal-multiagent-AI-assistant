@@ -7,6 +7,9 @@ def test_architecture_dot_contains_core_nodes() -> None:
     assert "FastAPI Backend" in dot
     assert "AgentOrchestrator" in dot
     assert "Hybrid Retriever" in dot
+    assert "VisionPreprocessor" in dot
+    assert "VisionFusion" in dot
+    assert "LLM Provider Selector" in dot
 
 
 def test_high_level_flow_points_present() -> None:
