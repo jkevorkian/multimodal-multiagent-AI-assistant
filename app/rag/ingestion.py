@@ -15,6 +15,7 @@ from app.interfaces.vector_store import VectorStore
 from app.interfaces.video import VideoClient
 from app.interfaces.vision import VisionClient
 from app.rag.chunking import chunk_text
+from app.video import TemporalAggregator, VideoAnalysisAdapter, VideoFrameSampler
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
@@ -66,6 +67,13 @@ class DocumentIngestionService:
         video_client: VideoClient | None = None,
         video_sample_fps: float = 1.0,
         video_max_frames: int = 24,
+        video_latency_budget_ms: int = 1500,
+        video_estimated_ms_per_frame: float = 12.0,
+        video_max_window_sec: float = 120.0,
+        video_max_key_events: int = 5,
+        video_remote_fetch_timeout_sec: float = 20.0,
+        video_max_remote_source_bytes: int = 120_000_000,
+        video_require_frame_findings: bool = True,
     ) -> None:
         self._embedding_client = embedding_client
         self._vector_store = vector_store
@@ -76,6 +84,13 @@ class DocumentIngestionService:
         self._video_client = video_client
         self._video_sample_fps = video_sample_fps
         self._video_max_frames = video_max_frames
+        self._video_latency_budget_ms = video_latency_budget_ms
+        self._video_estimated_ms_per_frame = video_estimated_ms_per_frame
+        self._video_max_window_sec = video_max_window_sec
+        self._video_max_key_events = video_max_key_events
+        self._video_remote_fetch_timeout_sec = video_remote_fetch_timeout_sec
+        self._video_max_remote_source_bytes = video_max_remote_source_bytes
+        self._video_require_frame_findings = video_require_frame_findings
 
     async def ingest(self, sources: list[str], source_type: str = "mixed") -> IngestionSummary:
         ids: list[str] = []
@@ -153,12 +168,34 @@ class DocumentIngestionService:
     async def _analyze_video_source(self, source: str) -> str:
         if self._video_client is None:
             return f"Video source: {source}"
-        analysis = await self._video_client.analyze_video(
+
+        adapter = VideoAnalysisAdapter(
+            video_client=self._video_client,
+            vision_client=self._vision_client,
+            require_frame_level_findings=self._video_require_frame_findings,
+            frame_sampler=VideoFrameSampler(
+                latency_budget_ms=self._video_latency_budget_ms,
+                estimated_ms_per_frame=self._video_estimated_ms_per_frame,
+                max_window_sec=self._video_max_window_sec,
+                remote_fetch_timeout_sec=self._video_remote_fetch_timeout_sec,
+                max_remote_source_bytes=self._video_max_remote_source_bytes,
+            ),
+            temporal_aggregator=TemporalAggregator(max_key_events=self._video_max_key_events),
+        )
+        analysis = await adapter.analyze(
             video_uri=source,
+            prompt="Extract retrieval-grounded timeline events from this video.",
             sample_fps=self._video_sample_fps,
             max_frames=self._video_max_frames,
         )
-        return f"Video source: {source}\nAnalysis: {analysis}"
+        events = " | ".join(analysis.key_events[: self._video_max_key_events])
+        return (
+            f"Video source: {source}\n"
+            f"Summary: {analysis.summary}\n"
+            f"Key events: {events}\n"
+            f"Processed frames: {analysis.processed_frames}\n"
+            f"Confidence: {analysis.confidence:.2f}"
+        )
 
     def _resolve_modality(self, source: str, source_type: str) -> str:
         normalized_source_type = source_type.strip().lower()

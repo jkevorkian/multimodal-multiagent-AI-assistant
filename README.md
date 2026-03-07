@@ -6,6 +6,11 @@ Multimodal assistant with:
 - Vision and video endpoints
 - Streamlit frontend for end-to-end usage
 
+Current delivery status (2026-03-06):
+- M0-M3 complete and consolidated.
+- M4.1 complete: video path now supports strict frame decode + per-frame VLM analysis + temporal aggregation, while preserving API contracts.
+- M5.1/M5.2 planned: context compaction (Codex-style) and steering controls.
+
 ## Stack
 - Backend: FastAPI
 - Orchestration: LangGraph
@@ -23,6 +28,11 @@ Multimodal assistant with:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+Optional for M4.1 local decoded-frame extraction:
+```powershell
+pip install opencv-python
 ```
 
 ## 3. Create `.env`
@@ -53,7 +63,7 @@ docker exec -it mm_maa_ollama ollama pull qwen3:4b
 
 Optional local multimodal + embeddings models:
 ```powershell
-docker exec -it mm_maa_ollama ollama pull llava:7b
+docker exec -it mm_maa_ollama ollama pull qwen3-vl:2b
 docker exec -it mm_maa_ollama ollama pull nomic-embed-text
 ```
 
@@ -70,7 +80,7 @@ MMAA_RAG_OPENAI_BASE_URL=http://localhost:11434/v1
 MMAA_RAG_OPENAI_API_KEY=local-placeholder
 
 MMAA_MULTIMODAL_PROVIDER=openai
-MMAA_MULTIMODAL_VISION_MODEL=llava:7b
+MMAA_MULTIMODAL_VISION_MODEL=qwen3-vl:2b
 MMAA_MULTIMODAL_BASE_URL=http://localhost:11434/v1
 MMAA_MULTIMODAL_API_KEY=local-placeholder
 ```
@@ -113,7 +123,7 @@ Open:
 
 Supported ingestion formats (current):
 - Documents: `pdf`, `docx`, `pptx`, `xlsx`, `txt`, `md/markdown`, `html/htm`, `csv`, `tsv`, `json/jsonl`, `yaml/yml`, `xml`, `log`, `ini`, `cfg`, `toml`
-- Media: common image/video extensions already supported by the multimodal pipeline
+- Media: common image/video extensions supported by the multimodal pipeline, indexed into the same RAG structure with modality metadata
 
 ## 8. Minimal API Smoke Test
 Ingest a local file:
@@ -151,3 +161,4 @@ docker compose -f deployment/docker-compose.qdrant.yml down -v
 - To force local model usage, explicitly set provider env vars to `openai` plus `*_BASE_URL`.
 - Local vision with `file://` image paths is supported by the multimodal adapter.
 - Vision preprocessing can resolve webpage URLs to concrete image assets before model inference.
+- Video analysis uses strict decode-based frame extraction (`cv2` required) and fails explicitly if decode cannot run.

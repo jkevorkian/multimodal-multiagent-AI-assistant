@@ -36,12 +36,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: defines FR/NFR testable requirements and boundaries.
 
 `docs/02-implementation-roadmap.md`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M5.2`; status `implemented`.
 - Theoretical role: milestone planning artifact for incremental delivery.
 - Technical/practical role: defines objectives, outputs, risks, and DoD per milestone.
 
 `docs/03-didactic-traceability.md`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M5.2`; status `implemented`.
 - Theoretical role: learning/decision narrative over implementation lifecycle.
 - Technical/practical role: stores didactic cards, decision log, and troubleshooting heuristics.
 
@@ -49,6 +49,11 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
 - Theoretical role: deployment/options guidance for local and self-hosted model backends.
 - Technical/practical role: documents OpenAI-compatible local endpoint profiles (Ollama/vLLM), container setup, and `.env` wiring.
+
+`docs/08-multimodal-research-and-m41.md`
+- Milestone metadata: introduced `M4.1`; updated `M4.1`; status `implemented`.
+- Theoretical role: research-backed architecture rationale for multimodal retrieval and video analysis upgrades.
+- Technical/practical role: records current papers/industry practices and maps them to concrete M4.1 implementation decisions.
 
 ### 3.2 Application Composition Root
 `app/__init__.py`
@@ -68,7 +73,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: groups config/logging/dependency modules under `app.core`.
 
 `app/core/config.py`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M4`; status `implemented`.
 - Theoretical role: centralized environment-driven configuration contract.
 - Technical/practical role: defines `Settings`, including app, RAG, agent, LLM-provider, and multimodal tuning parameters.
 
@@ -78,7 +83,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: configures JSON logging and injects request/trace IDs.
 
 `app/core/dependencies.py`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M4.1`; status `implemented`.
 - Theoretical role: dependency inversion entrypoint between API and services.
 - Technical/practical role: builds and provides `ServiceContainer` for endpoint dependencies, including LLM and multimodal client selection.
 
@@ -181,9 +186,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: implements `POST /vision/analyze` using active vision client output with structured finding extraction.
 
 `app/api/routes/video.py`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M4.1`; status `implemented`.
 - Theoretical role: video multimodal entrypoint contract.
-- Technical/practical role: implements `POST /video/analyze` using active video client output with structured key-event extraction.
+- Technical/practical role: implements `POST /video/analyze` using adapter-backed timeline sampling/aggregation with structured key-event extraction.
 
 `app/api/routes/metrics.py`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -215,7 +220,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: implements pluggable embedding adapters (deterministic, OpenAI, SentenceTransformers), batch embedding support, OpenAI-compatible base-url routing, and cosine similarity.
 
 `app/rag/ingestion.py`
-- Milestone metadata: introduced `M1`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M1`; updated `M4.1`; status `implemented`.
 - Theoretical role: ingestion orchestration boundary for document indexing.
 - Technical/practical role: loads text/image/video sources, routes multimodal analysis when needed, chunks descriptors, embeds, and upserts modality-aware metadata.
 
@@ -378,12 +383,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical change: delegates `/agents/run` to orchestrator with configurable tool budget and step limits, and adds `/agents/tools` discovery endpoint.
 
 `app/core/dependencies.py`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M4.1`; status `implemented`.
 - Theoretical role change: expands service composition beyond orchestration into LLM/multimodal provider selection.
 - Technical/practical change: wires tool registry, role agents, checkpoint store, LangGraph orchestrator runtime, provider-based LLM selection, and multimodal clients.
 
 `app/core/config.py`
-- Milestone metadata: introduced `M0`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M4`; status `implemented`.
 - Theoretical role change: now includes orchestration controls in runtime policy surface.
 - Technical/practical change: adds M2 settings for orchestration plus runtime knobs for LLM/multimodal providers.
 
@@ -395,9 +400,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: enables importable frontend architecture helpers and app modules.
 
 `frontend/architecture.py`
-- Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M2.2`; updated `M5.2`; status `implemented`.
 - Theoretical role: architecture communication artifact.
-- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets, including LangGraph, tool discovery endpoint, and multimodal preprocessing details.
+- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets, including LangGraph, tool discovery endpoint, M4.1 video frame-evidence pipeline, and planned runtime controls (context compaction + steering).
 
 `frontend/streamlit_app.py`
 - Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
@@ -405,7 +410,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: renders architecture diagram, adds user-friendly implementation flow tab, preserves route-level playground forms, discovers tools through `/agents/tools`, and supports clipboard image paste ingestion.
 
 `tests/test_frontend_architecture.py`
-- Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M2.2`; updated `M5.2`; status `implemented`.
 - Theoretical role: regression guard for architecture communication outputs.
 - Technical/practical role: verifies key DOT nodes (including multimodal and LLM layers) and explanatory flow points exist.
 
@@ -461,22 +466,37 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: multimodal endpoint quality and validation regression suite.
 - Technical/practical role: verifies deterministic fixture handling, type/size validation, and evidence-grounded `/vision/analyze` output.
 
-## 8. M4 - Video MVP Path (Planned)
+## 8. M4 - Video MVP Path
 
 `app/video/frame_sampler.py`
-- Milestone metadata: introduced `M4`; status `planned`.
+- Milestone metadata: introduced `M4`; updated `M4.1`; status `implemented`.
 - Theoretical role: temporal sampling strategy boundary.
-- Technical/practical role: selects representative frames under latency/cost budget.
+- Technical/practical role: samples timeline with optional local decode-based frame extraction, frame payload emission, and deterministic fallback.
 
 `app/video/temporal_aggregator.py`
-- Milestone metadata: introduced `M4`; status `planned`.
+- Milestone metadata: introduced `M4`; updated `M4.1`; status `implemented`.
 - Theoretical role: temporal reasoning and synthesis boundary.
-- Technical/practical role: combines frame-level findings into sequence-aware summary.
+- Technical/practical role: composes timeline-oriented key events from frame-level findings or summary fallback with timestamp/source evidence tags.
 
 `app/video/adapter.py`
-- Milestone metadata: introduced `M4`; status `planned`.
+- Milestone metadata: introduced `M4`; updated `M4.1`; status `implemented`.
 - Theoretical role: provider abstraction realization for video inference.
-- Technical/practical role: coordinates frame/video analysis and normalizes event outputs.
+- Technical/practical role: coordinates frame sampling, per-frame vision analysis, provider summary, and temporal aggregation into a route-ready analysis result.
+
+`app/api/routes/video.py`
+- Milestone metadata: introduced `M0`; updated `M4.1`; status `implemented`.
+- Theoretical role: video multimodal entrypoint contract.
+- Technical/practical role: routes requests through `VideoAnalysisAdapter` and returns timeline-evidenced key events plus budget-aware `processed_frames`.
+
+`app/core/config.py`
+- Milestone metadata: introduced `M0`; updated `M4`; status `implemented`.
+- Theoretical role: centralized environment-driven runtime policy.
+- Technical/practical role: now includes video sampling latency budget and timeline aggregation controls (`MMAA_MULTIMODAL_VIDEO_*` tuning fields).
+
+`tests/test_m4_video.py`
+- Milestone metadata: introduced `M4`; updated `M4.1`; status `implemented`.
+- Theoretical role: regression suite for M4 temporal pipeline behavior.
+- Technical/practical role: validates decoded-frame path, frame-level finding integration, latency-budget caps, temporal ordering coherence, adapter composition, and route-level output semantics.
 
 ## 9. M5 - Production Hardening (Planned)
 
@@ -500,7 +520,36 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: error taxonomy boundary across application layers.
 - Technical/practical role: standardizes exception types and API error mapping.
 
-## 10. M6 - Evaluation and Deployment (Planned)
+## 10. M5.1 - Context Compaction (Planned)
+
+`app/core/context_compaction.py`
+- Milestone metadata: introduced `M5.1`; status `planned`.
+- Theoretical role: context-budget control boundary for long sessions.
+- Technical/practical role: triggers threshold-based compaction and produces durable summary checkpoints with preservation invariants.
+
+`app/agents/context_manager.py`
+- Milestone metadata: introduced `M5.1`; status `planned`.
+- Theoretical role: orchestration memory lifecycle boundary.
+- Technical/practical role: applies compaction decisions to agent state before/after stages.
+
+`app/contracts/context.py`
+- Milestone metadata: introduced `M5.1`; status `planned`.
+- Theoretical role: compacted-context contract boundary.
+- Technical/practical role: defines summary checkpoint schema and pinned-context fields.
+
+## 11. M5.2 - Steering and Policy Controls (Planned)
+
+`app/core/steering.py`
+- Milestone metadata: introduced `M5.2`; status `planned`.
+- Theoretical role: policy-control boundary for response/tool behavior.
+- Technical/practical role: applies steering profiles for style, grounding, and tool policy.
+
+`app/contracts/steering.py`
+- Milestone metadata: introduced `M5.2`; status `planned`.
+- Theoretical role: steering request/trace schema boundary.
+- Technical/practical role: defines steering profile model and enforcement metadata.
+
+## 12. M6 - Evaluation and Deployment (Planned)
 
 `evaluation/runner.py`
 - Milestone metadata: introduced `M6`; status `planned`.
@@ -532,7 +581,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: local deployment topology artifact.
 - Technical/practical role: composes service and infrastructure for reproducible runs.
 
-## 11. Update Protocol
+## 13. Update Protocol
 - Add each new file under the milestone where it is first introduced.
 - When behavior changes materially, update the file's milestone metadata and description.
 - Keep `docs/03-didactic-traceability.md` focused on decisions and learning rationale; keep file mapping in this document.

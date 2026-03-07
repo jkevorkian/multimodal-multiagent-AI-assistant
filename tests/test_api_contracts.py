@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
+from app.core.dependencies import create_test_container, get_container
 from app.main import app
 
 
@@ -94,8 +95,65 @@ def test_vision_contract() -> None:
     assert "trace" in payload
 
 
-def test_video_contract() -> None:
-    response = client.post("/video/analyze", json={"video_uri": "s3://bucket/video.mp4"})
+def test_video_contract(monkeypatch, tmp_path) -> None:
+    class _Encoded:
+        def __init__(self, payload: bytes) -> None:
+            self._payload = payload
+
+        def tobytes(self) -> bytes:
+            return self._payload
+
+    class _Frame:
+        shape = (480, 640, 3)
+
+    class _Capture:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, prop: int) -> float:
+            if prop == _FakeCV2.CAP_PROP_FPS:
+                return 10.0
+            if prop == _FakeCV2.CAP_PROP_FRAME_COUNT:
+                return 100.0
+            return 0.0
+
+        def set(self, prop: int, value: float) -> bool:  # noqa: ARG002
+            return True
+
+        def read(self):
+            return True, _Frame()
+
+        def release(self) -> None:
+            return None
+
+    class _FakeCV2:
+        CAP_PROP_FPS = 1
+        CAP_PROP_FRAME_COUNT = 2
+        CAP_PROP_POS_MSEC = 3
+        INTER_AREA = 1
+
+        def VideoCapture(self, path: str) -> _Capture:
+            return _Capture(path)
+
+        def imencode(self, ext: str, frame: _Frame):  # noqa: ARG002
+            return True, _Encoded(b"jpeg-bytes")
+
+        def resize(self, frame: _Frame, size: tuple[int, int], interpolation: int):  # noqa: ARG002
+            return frame
+
+    monkeypatch.setattr("app.video.frame_sampler._load_cv2", lambda: _FakeCV2())
+    video_path = tmp_path / "contract_video.mp4"
+    video_path.write_bytes(b"video")
+
+    container = create_test_container()
+    app.dependency_overrides[get_container] = lambda: container
+    try:
+        response = client.post("/video/analyze", json={"video_uri": video_path.as_uri()})
+    finally:
+        app.dependency_overrides.clear()
     payload = response.json()
     assert response.status_code == 200
     assert "summary" in payload

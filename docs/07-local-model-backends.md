@@ -13,8 +13,9 @@ Run this project against local or self-hosted OpenAI-compatible endpoints so you
   - Base URL (`*_BASE_URL`) for local servers.
 - Local file image URIs (`file://...`) are converted to `data:` URLs in the vision client for better compatibility with OpenAI-style VLM APIs.
 - Webpage URLs passed to vision preprocessing are resolved to concrete image assets when discoverable (meta tags/image links), then sent as image payloads.
+- Video pipeline (M4.1) uses strict decoded-frame extraction for per-frame VLM analysis (`opencv-python` required) and fails explicitly if decode is unavailable.
 
-## 3. Recommended Option for This Laptop (RTX 4070 + 16 GB RAM)
+## 3. Recommended Option for This Laptop (RTX 4070M, 8 GB VRAM)
 Use **Ollama** as the first local profile.
 
 Why:
@@ -56,7 +57,7 @@ docker exec -it mm_maa_ollama ollama ps
 2. Pull models (examples):
 ```powershell
 docker exec -it mm_maa_ollama ollama pull qwen3:4b
-docker exec -it mm_maa_ollama ollama pull llava:7b
+docker exec -it mm_maa_ollama ollama pull qwen3-vl:2b
 docker exec -it mm_maa_ollama ollama pull nomic-embed-text
 ```
 
@@ -73,7 +74,7 @@ MMAA_RAG_OPENAI_BASE_URL=http://localhost:11434/v1
 MMAA_RAG_OPENAI_API_KEY=local-placeholder
 
 MMAA_MULTIMODAL_PROVIDER=openai
-MMAA_MULTIMODAL_VISION_MODEL=llava:7b
+MMAA_MULTIMODAL_VISION_MODEL=qwen3-vl:2b
 MMAA_MULTIMODAL_BASE_URL=http://localhost:11434/v1
 MMAA_MULTIMODAL_API_KEY=local-placeholder
 ```
@@ -94,6 +95,8 @@ docker run --runtime nvidia --gpus all `
 Then point this app to `http://localhost:8001/v1` via `MMAA_LLM_BASE_URL` and/or `MMAA_RAG_OPENAI_BASE_URL`.
 
 ## 7. Notes for Resource Budget
-- On this hardware, start with 4B-8B quantized text models and 3B-4B vision models.
+- On this hardware, start with `qwen3:4b` for text and `qwen3-vl:2b` for vision/video tasks.
+- If latency or VRAM pressure is high, drop text model to `qwen3:1.7b` before reducing retrieval quality knobs.
 - Keep `top_k` and generation lengths moderate for stable latency.
 - If VRAM pressure appears, reduce model size first, then reduce context/token budgets.
+- For decoded-frame video analysis, reduce sampled FPS/max frames first before increasing model size.

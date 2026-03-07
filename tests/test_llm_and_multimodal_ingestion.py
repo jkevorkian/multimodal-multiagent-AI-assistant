@@ -39,6 +39,58 @@ class _VideoStub:
         return f"video-summary::{video_uri}"
 
 
+class _Encoded:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def tobytes(self) -> bytes:
+        return self._payload
+
+
+class _Frame:
+    shape = (480, 640, 3)
+
+
+class _Capture:
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    def isOpened(self) -> bool:
+        return True
+
+    def get(self, prop: int) -> float:
+        if prop == _FakeCV2.CAP_PROP_FPS:
+            return 10.0
+        if prop == _FakeCV2.CAP_PROP_FRAME_COUNT:
+            return 100.0
+        return 0.0
+
+    def set(self, prop: int, value: float) -> bool:  # noqa: ARG002
+        return True
+
+    def read(self):
+        return True, _Frame()
+
+    def release(self) -> None:
+        return None
+
+
+class _FakeCV2:
+    CAP_PROP_FPS = 1
+    CAP_PROP_FRAME_COUNT = 2
+    CAP_PROP_POS_MSEC = 3
+    INTER_AREA = 1
+
+    def VideoCapture(self, path: str) -> _Capture:
+        return _Capture(path)
+
+    def imencode(self, ext: str, frame: _Frame):  # noqa: ARG002
+        return True, _Encoded(b"jpeg-bytes")
+
+    def resize(self, frame: _Frame, size: tuple[int, int], interpolation: int):  # noqa: ARG002
+        return frame
+
+
 def test_llm_auto_provider_falls_back_without_api_key() -> None:
     selection = build_llm_client(provider="auto", api_key=None)
     assert selection.provider_name == "heuristic"
@@ -88,7 +140,11 @@ def test_openai_vision_client_serializes_file_uri_as_data_url(tmp_path) -> None:
     assert encoded.startswith("data:image/png;base64,")
 
 
-def test_image_and_video_are_ingested_with_modality_metadata() -> None:
+def test_image_and_video_are_ingested_with_modality_metadata(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("app.video.frame_sampler._load_cv2", lambda: _FakeCV2())
+    video_path = tmp_path / "demo.mp4"
+    video_path.write_bytes(b"fake-video")
+
     store = _VectorStoreRecorder()
     embeddings = build_embedding_client(provider="deterministic", deterministic_dimensions=16).client
     ingestion = DocumentIngestionService(
@@ -102,7 +158,7 @@ def test_image_and_video_are_ingested_with_modality_metadata() -> None:
 
     summary = asyncio.run(
         ingestion.ingest(
-            sources=["https://assets.example.com/diagram.png", "https://assets.example.com/demo.mp4"],
+            sources=["https://assets.example.com/diagram.png", video_path.as_uri()],
             source_type="mixed",
         )
     )
@@ -111,4 +167,5 @@ def test_image_and_video_are_ingested_with_modality_metadata() -> None:
     assert any(row["metadata"].get("modality") == "image" for row in store.rows)
     assert any(row["metadata"].get("modality") == "video" for row in store.rows)
     assert any("vision-summary" in row["metadata"].get("snippet", "") for row in store.rows)
-    assert any("video-summary" in row["metadata"].get("snippet", "") for row in store.rows)
+    assert any("Key events:" in row["metadata"].get("snippet", "") for row in store.rows)
+    assert any("[t=" in row["metadata"].get("snippet", "") for row in store.rows)

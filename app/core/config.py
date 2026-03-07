@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     multimodal_vision_model: str = "gpt-4o-mini"
     multimodal_video_sample_fps: float = 1.0
     multimodal_video_max_frames: int = 24
+    multimodal_video_latency_budget_ms: int = 1500
+    multimodal_video_estimated_ms_per_frame: float = 12.0
+    multimodal_video_max_window_sec: float = 120.0
+    multimodal_video_max_key_events: int = 5
+    multimodal_video_remote_fetch_timeout_sec: float = 20.0
+    multimodal_video_max_remote_source_bytes: int = 120_000_000
+    multimodal_video_require_frame_findings: bool = True
     vision_max_source_bytes: int = 5_000_000
 
     # Agent orchestration guardrails.

@@ -1,12 +1,12 @@
 # 05 - Progress Log Handoff
 
 ## 1. Snapshot
-- Date: 2026-03-05
+- Date: 2026-03-06
 - Branch: `main`
-- Current HEAD: `6b98bb0` (pre-commit snapshot in this workspace)
-- Working tree status: M2/M2.2/M3 implementation set is present with additional UX and ingestion upgrades pending commit
+- Current HEAD: `fdbcf90` (M2/M2.2/M3 consolidated commit)
+- Working tree status: includes M4.1 implementation + documentation updates pending commit
 - Last full test run:
-  - `.\venv\Scripts\python.exe -m pytest -q` -> `48 passed`
+  - `.\venv\Scripts\python.exe -m pytest -q` -> `54 passed`
 
 ## 2. Milestone Status
 - M0: complete.
@@ -14,7 +14,12 @@
 - M2: complete (LangGraph orchestration + tool discovery endpoint).
 - M2.2: complete (Streamlit architecture + implementation flow, route playground).
 - M3: complete and extended (vision preprocess/adapter/fusion + webpage image resolution).
-- M4+: planned.
+- M4.1: implemented in current working tree (pending commit).
+- M5: planned.
+- M5.1 (context compaction): planned.
+- M5.2 (steering controls): planned.
+- M5.3 (multimodal embeddings stack): planned.
+- M6+: planned.
 
 ## 3. Delivered Since Previous Handoff
 
@@ -53,12 +58,34 @@
   - `requirements.txt`
   - `README.md`
 
+### 3.5 M4.1 Video Timeline + Frame-Evidence Pipeline
+- Upgraded video pipeline:
+  - `VideoFrameSampler` now supports optional local decode-based frame extraction and emits frame image payloads.
+  - `VideoAnalysisAdapter` now adds per-frame vision analysis before temporal aggregation.
+  - `TemporalAggregator` prioritizes frame findings and retains summary fallback.
+- `/video/analyze` preserves contract and now reflects frame-evidence-aware timeline composition.
+- Added/updated M4 tests:
+  - decoded-frame path behavior
+  - frame-level finding integration
+  - temporal ordering/coherence
+  - route-level budget behavior
+- Ingestion integration:
+  - `DocumentIngestionService` now reuses video adapter pipeline so video timeline evidence is indexed into shared RAG.
+
+### 3.6 Planning Additions (M5.1 + M5.2)
+- Added roadmap/requirements entries for:
+  - context compaction (Codex-style checkpoint summaries under token pressure)
+  - steering controls (style/tool/grounding policy profiles)
+- Updated frontend architecture diagram to reflect:
+  - M4.1 frame-evidence flow
+  - planned runtime controls for compaction and steering
+
 ## 4. Config and Runtime Notes
 - `.env` / `.env.example` are organized for Ollama-only OpenAI-compatible local profile.
 - Current local model defaults documented around:
   - text model: `qwen3:4b`
   - embedding model: `nomic-embed-text`
-  - vision model: `llava:7b`
+  - vision model: `qwen3-vl:2b`
 
 ## 5. Documentation Updated in This Pass
 - `README.md`
@@ -66,13 +93,17 @@
 - `docs/02-implementation-roadmap.md`
 - `docs/03-didactic-traceability.md`
 - `docs/04-file-traceability-by-milestone.md`
+- `docs/08-multimodal-research-and-m41.md`
 - `docs/07-local-model-backends.md`
+- `frontend/architecture.py`
 
 ## 6. Known Caveats
-- Video endpoint is still heuristic-first in current scope; full temporal reasoning remains M4.
+- Video frame extraction is strict decode-based (`cv2` required) and fails explicitly when decode backend is unavailable.
 - FastAPI startup deprecation warning (`on_event`) remains non-blocking.
 - Full-suite benchmark/eval artifacts remain M6 scope.
 
 ## 7. Suggested Immediate Next Step
-1. Commit the current integrated set with a milestone-aware message.
-2. Then plan M4 scope slice (frame sampler + temporal aggregation + tests) before entering M5 hardening/evaluation work.
+1. Commit current M4.1 + documentation synchronization set.
+2. Start M5.1 with a minimal context compaction slice (threshold trigger + pinned-context schema + tests).
+3. Follow with M5.2 steering baseline (profile contract + enforcement in `/query` and `/agents/run`).
+4. Then implement M5.3 multimodal embedding stack (Qwen3-VL embedding/reranker + Qdrant named vectors).

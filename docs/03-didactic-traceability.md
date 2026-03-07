@@ -17,6 +17,8 @@ This document explains learning intent and technical reasoning during implementa
 | M2.2 | Frontend architecture visibility | API contract usability, architecture communication, backend/frontend coupling boundaries | Streamlit, Graphviz DOT, HTTP API clients |
 | M3 | Image path | Input preprocessing, multimodal inference, evidence fusion | Vision model adapters |
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
+| M5.1 | Context compaction | Token-budget control, state summarization, memory safety invariants | Session/context manager patterns, summary checkpoints |
+| M5.2 | Steering controls | Policy layering, response-style control, tool/citation constraints | Request policy models, runtime guardrails |
 | M5 | Hardening | Retry strategy, caching layers, model routing, error taxonomy | Async IO, resilient API patterns |
 | M6 | Evaluation + deploy | Metric design, retrieval/generation evaluation, reproducibility, containerization | Benchmark runners, Docker, retrieval/grounding metrics |
 
@@ -123,6 +125,14 @@ Temporal aggregation captures event order and progression, which single-frame an
 ### Why this technology fits
 A staged video pipeline gives direct control over compute budget and output quality tradeoffs.
 
+### M4 implementation notes
+- Video path now uses explicit modules: `VideoFrameSampler` -> `TemporalAggregator` -> `VideoAnalysisAdapter`.
+- Sampling supports local decode-based frame extraction (optional `cv2`) and keeps deterministic heuristic fallback.
+- Adapter-level flow now supports per-frame VLM analysis before temporal aggregation.
+- Route output includes timeline-oriented key events with explicit time/source evidence tags.
+- Existing API contract is preserved (`summary`, `key_events`, `confidence`, `processed_frames`, `trace`).
+- Ingestion now reuses the same video adapter path so timeline evidence is indexed in shared RAG.
+
 ## M5 - Hardening
 ### How it works
 Retries handle transient failures, caching avoids repeated expensive calls, and model routing balances cost and quality.
@@ -132,6 +142,16 @@ Operational safeguards reduce tail failure rates and cost variance under realist
 
 ### Why this technology fits
 Composable middleware-style utilities keep resilience logic centralized and testable.
+
+### M5.1 context compaction plan (Codex-style)
+- Trigger compaction when session/orchestration context crosses a token threshold.
+- Preserve pinned blocks (requirements, user constraints, tool outputs, citations, open tasks).
+- Replace old turns with compacted summary checkpoints and continue processing from compact state.
+
+### M5.2 steering plan
+- Add explicit steering profiles (`balanced`, `concise`, `strict-grounded`, `creative`) at request/session level.
+- Apply steering to answer style, tool policy, and grounding strictness.
+- Emit steering profile and enforcement notes in traces for observability.
 
 ## M6 - Evaluation + Deploy
 ### How it works
@@ -357,6 +377,49 @@ Use this entry template for every major decision:
 - Failure: users often passed article URLs (HTML pages) to `/vision/analyze`, causing provider failures or degraded metadata-only responses.
 - Fix: preprocessor now resolves webpage image candidates (`og:image`, `twitter:image`, and image URLs in markup), downloads the resolved image, and forwards a concrete data URI to the vision model.
 - Verification: dedicated tests for webpage-resolution success/failure are green and real URL checks now resolve image payloads.
+
+### What Changed in Understanding (M4)
+- Temporal coherence improves materially when per-frame VLM findings are available and merged with video-level summary.
+- Decode-based sampling should be opportunistic (when local decode dependencies exist), with deterministic fallback to preserve portability.
+- Latency budgets should be treated as first-class input to sampling policy, not only as post-hoc metrics.
+
+### What Failed and How It Was Fixed (M4)
+- Failure: previous `/video/analyze` estimated processed frames with static heuristics and lacked frame-level evidence extraction.
+- Fix: sampler now attempts real local frame decode and adapter performs per-frame VLM analysis before temporal aggregation.
+- Verification: M4 tests validate decoded-frame path behavior, frame-level finding integration, budget constraints, and timeline evidence fields.
+
+- Date: 2026-03-06
+- Milestone: M4
+- Context: video endpoint lacked explicit temporal pipeline modules and budget-aware frame controls.
+- Decision: implement deterministic frame sampler + temporal aggregator + adapter, then route `/video/analyze` through the new stack.
+- Alternatives considered: keep heuristic string parsing, add heavy ffmpeg/opencv dependency immediately.
+- Why chosen: enables milestone goals now with low infra friction while preserving extensibility.
+- Expected impact: more coherent timeline output and predictable latency behavior.
+- Observed outcome: route now emits timestamped key events and enforces configurable frame budget caps.
+- Would we choose it again?: yes.
+- Affected modules: `app/video/frame_sampler.py`, `app/video/temporal_aggregator.py`, `app/video/adapter.py`, `app/api/routes/video.py`, `tests/test_m4_video.py`.
+
+- Date: 2026-03-06
+- Milestone: M4.1
+- Context: M4 timeline pipeline still depended mainly on provider summary text and heuristic timeline estimates.
+- Decision: add optional local decode-based frame extraction + per-frame vision analysis while keeping fallback and API contract stability.
+- Alternatives considered: keep summary-only aggregation, switch to heavy always-on ffmpeg/cv stack.
+- Why chosen: improves evidence quality now while preserving lightweight local compatibility.
+- Expected impact: stronger temporal grounding and more robust video evidence in both endpoint and ingestion.
+- Observed outcome: `/video/analyze` and ingestion now reuse adapter-based frame-evidence pipeline; full test suite remains green.
+- Would we choose it again?: yes.
+- Affected modules: `app/video/frame_sampler.py`, `app/video/adapter.py`, `app/video/temporal_aggregator.py`, `app/rag/ingestion.py`, `tests/test_m4_video.py`.
+
+- Date: 2026-03-06
+- Milestone: M5.1-M5.2 planning
+- Context: long-session token growth and inconsistent response control require first-class runtime governance.
+- Decision: add explicit milestone slices for context compaction (Codex-style checkpointing) and steering profiles/policies.
+- Alternatives considered: defer both to post-M6, rely only on prompt engineering.
+- Why chosen: both features reduce operational risk and improve controllability without breaking endpoint contracts.
+- Expected impact: lower long-session token cost, improved reliability, and predictable policy-constrained behavior.
+- Observed outcome: roadmap and requirements now include FR/NFR coverage for both features.
+- Would we choose it again?: yes.
+- Affected modules: `docs/01-requirements.md`, `docs/02-implementation-roadmap.md`, `frontend/architecture.py`.
 
 - Date: 2026-03-05
 - Milestone: M2-M2.2 bridge

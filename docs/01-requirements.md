@@ -34,10 +34,12 @@ This document defines what the `multimodal-multiagent-AI-assistant` must do, wha
 | FR-007 | The system shall expose tool-calling behavior where the agent decides when to call tools. | Scenario test where at least one tool is selected and executed by policy. |
 | FR-008 | The system shall implement multi-agent roles: Research Agent, Analyst Agent, Answer Agent. | Orchestration test verifying role execution order and shared state transitions. |
 | FR-009 | The system shall analyze images and return a textual interpretation. | API test for `/vision/analyze` using deterministic sample image. |
-| FR-010 | The system shall analyze video input using frame sampling and temporal aggregation. | API test for `/video/analyze` validating frame extraction and synthesis output. |
+| FR-010 | The system shall analyze video input using frame sampling, temporal aggregation, and frame-level vision evidence when available. | API/adapter tests for `/video/analyze` validating frame extraction, per-frame findings integration, and synthesis output. |
 | FR-011 | The system shall expose the following API endpoints: `/health`, `/ingest/documents`, `/query`, `/agents/run`, `/agents/tools`, `/vision/analyze`, `/video/analyze`, `/metrics`. | Contract tests confirming endpoint availability, status codes, and schema conformance. |
 | FR-012 | The system shall provide evaluation outputs for accuracy, latency, and cost at run and aggregate levels. | Evaluation runner test generating per-run and summary report artifacts. |
 | FR-013 | The system shall support pluggable vector store backends with fallback coexistence (external vector DB + PostgreSQL/in-memory). | Adapter tests validating fallback behavior when primary store is unavailable. |
+| FR-014 | The system shall compact long conversation/orchestration context into summary checkpoints while preserving constraints, citations, and unresolved tasks. | Unit/integration tests that force compaction at a token threshold and verify preservation invariants. |
+| FR-015 | The system shall support request/session steering profiles that control style, grounding strictness, and tool-use policy. | Contract and behavior tests validating steering profile application and policy enforcement. |
 
 ## 5. Required Public Contracts
 ### 5.1 Endpoints
@@ -98,6 +100,7 @@ Shared state object must include at least:
 - NFR-COST-001: Embedding and response caching must be enabled by default in non-debug environments.
 - NFR-COST-002: Model routing must support at least one lower-cost default model and one higher-quality fallback model.
 - NFR-COST-003: embedding provider selection must allow low-cost vs high-quality profiles without code changes.
+- NFR-COST-004: long-running sessions should reduce token growth through automatic context compaction under budget pressure.
 
 ### 6.5 Security Baseline
 - NFR-SEC-001: Secrets must be sourced from environment variables; no hardcoded API keys.
@@ -115,7 +118,7 @@ MVP is complete when all of the following are true:
 
 ## 8. Acceptance Criteria Checklist
 ### Functional
-- [ ] FR-001 through FR-013 are validated by automated tests.
+- [ ] FR-001 through FR-015 are validated by automated tests.
 - [ ] API contract tests pass for all required endpoints.
 - [ ] Multi-agent run traces show role-specific steps and state transitions.
 

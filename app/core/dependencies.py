@@ -126,6 +126,13 @@ def _build_service_container_internal(
         video_client=multimodal_selection.video,
         video_sample_fps=settings.multimodal_video_sample_fps,
         video_max_frames=settings.multimodal_video_max_frames,
+        video_latency_budget_ms=settings.multimodal_video_latency_budget_ms,
+        video_estimated_ms_per_frame=settings.multimodal_video_estimated_ms_per_frame,
+        video_max_window_sec=settings.multimodal_video_max_window_sec,
+        video_max_key_events=settings.multimodal_video_max_key_events,
+        video_remote_fetch_timeout_sec=settings.multimodal_video_remote_fetch_timeout_sec,
+        video_max_remote_source_bytes=settings.multimodal_video_max_remote_source_bytes,
+        video_require_frame_findings=settings.multimodal_video_require_frame_findings,
     )
     retriever = TextRAGRetriever(
         embedding_client=embeddings,

@@ -13,7 +13,10 @@ Implement the assistant in milestone order so each phase is deployable, testable
 | M3 | Image multimodal path | Medium | M2.2 |
 | M4 | Video MVP path | High | M3 |
 | M5 | Production hardening | High | M1-M4 |
-| M6 | Evaluation and deployment | Medium | M5 |
+| M5.1 | Context compaction (Codex-style) | High | M5 |
+| M5.2 | Steering and policy controls | High | M5 |
+| M5.3 | Multimodal embedding stack (Qwen3-VL + multivector DB) | High | M4-M5.2 |
+| M6 | Evaluation and deployment | Medium | M5-M5.3 |
 
 ## 3. Milestone Details
 
@@ -138,6 +141,15 @@ Add explicit role-based orchestration and tool routing with durable execution an
 - Orchestration runtime is backed by LangGraph while preserving existing API contract.
 - Answer synthesis uses provider-backed LLM selection (OpenAI when configured, deterministic grounded fallback otherwise).
 
+### Recommended Tool Catalog (M2.x Follow-up)
+- `web_search_tool`: fetch recent/public info when retrieval corpus is insufficient.
+- `url_fetch_tool`: deterministic fetch + sanitize of specific URLs referenced by user.
+- `rag_debug_tool`: inspect retrieved chunks/scores to debug grounding quality.
+- `filesystem_tool` (scoped): list/read allowed local workspace files for operator workflows.
+- `vision_ocr_tool`: extract text from image frames/screenshots for stronger multimodal retrieval.
+- `asr_tool`: transcript extraction from video/audio for timeline-grounded indexing.
+- `system_metrics_tool`: expose local GPU/VRAM/runtime health for on-prem tuning.
+
 ### Implementation Status
 - Current branch status (2026-03-04): implemented and test-covered, with LangGraph orchestration and provider-backed LLM wiring.
 
@@ -242,6 +254,15 @@ Add video understanding with frame sampling + temporal aggregation and retrieval
 - Video endpoint produces coherent summary with temporal cues.
 - Delta analysis section is completed in didactic doc.
 
+### Implementation Status
+- Current branch status (2026-03-06): implemented in current working tree and test-covered.
+- Delivered now:
+  - `VideoFrameSampler` now performs strict local/remote decode-based sampling (`cv2` required), with explicit failure when decode is unavailable.
+  - `VideoAnalysisAdapter` now orchestrates per-frame vision analysis plus provider-level video summary.
+  - `TemporalAggregator` now composes events from frame-level findings and prioritizes those findings for top-level summary.
+  - `/video/analyze` preserves response contract while emitting timeline-evidenced key events (`[t=...s][source=...]`) and budget-aware `processed_frames`.
+  - Multimodal ingestion now uses the same video adapter path so video evidence is indexed in the shared RAG structure.
+
 ## M5 - Production Hardening
 ### Objective
 Make runtime behavior reliable, observable, and cost-aware.
@@ -273,6 +294,108 @@ Make runtime behavior reliable, observable, and cost-aware.
 ### Definition of Done
 - Logs, retries, cache, and routing are measurable and documented.
 - Non-functional acceptance checks are green.
+
+## M5.1 - Context Compaction (Codex-style)
+### Objective
+Prevent context-window overflow by compacting long agent/query sessions into durable summary checkpoints while preserving key constraints, citations, and unresolved tasks.
+
+### Outputs
+- Code modules:
+  - `app/core/context_compaction.py`
+  - `app/agents/context_manager.py`
+  - `app/contracts/context.py` (optional compacted-context schema)
+- Integration points:
+  - Orchestrator pre-step guard (trigger compaction when token threshold is exceeded).
+  - Query pipeline guard for long multi-turn sessions.
+- Tests:
+  - Trigger-threshold tests.
+  - Summary-quality invariants (must preserve goals, constraints, citations, open tasks).
+  - No-regression tests for answer quality after compaction.
+- Docs updates:
+  - Document compaction strategy and safety invariants.
+
+### Risks and Mitigation
+- Risk: critical context loss after aggressive pruning.
+- Mitigation: enforce pinned-context blocks (requirements, constraints, tool outputs, citations) and validate compaction output schema before replacing history.
+
+### Rollback/Fallback
+- Disable automatic compaction and continue with warning-only mode if quality regression is detected.
+
+### Definition of Done
+- Session state compacts automatically under budget pressure.
+- Compacted state preserves critical facts and constraints in tests.
+- Latency/token usage improves on long-session benchmarks without citation-quality regression.
+
+## M5.2 - Steering and Policy Controls
+### Objective
+Add explicit steering controls so users/operators can shape style, risk posture, tool usage, and citation strictness without changing prompt templates manually.
+
+### Outputs
+- Code modules:
+  - `app/core/steering.py`
+  - `app/contracts/steering.py`
+  - route wiring updates in `app/api/routes/query.py` and `app/api/routes/agents.py`
+- Features:
+  - Steering profiles (e.g., `balanced`, `concise`, `strict-grounded`, `creative`).
+  - Tool-use steering (allow/deny/require list).
+  - Grounding steering (minimum citation requirement / abstention policy).
+- Tests:
+  - Profile application tests.
+  - Tool steering enforcement tests.
+  - Safety/grounding regression tests.
+- Docs updates:
+  - Steering profile definitions and operational guidance.
+
+### Risks and Mitigation
+- Risk: conflicting steering constraints degrade answer utility.
+- Mitigation: deterministic precedence rules and runtime conflict diagnostics.
+
+### Rollback/Fallback
+- Fallback to default `balanced` steering profile if requested profile is invalid or conflicting.
+
+### Definition of Done
+- Steering is configurable per request/session and observable in traces.
+- Tool and grounding policies are enforced consistently.
+- Default behavior remains backward compatible for existing clients.
+
+## M5.3 - Multimodal Embedding Stack (Qwen3-VL + Multivector DB)
+### Objective
+Store and retrieve text, image, screenshot, and video evidence in a shared multimodal vector space, then rerank with cross-modal precision.
+
+### Outputs
+- Code modules:
+  - `app/rag/multimodal_embeddings.py`
+  - `app/interfaces/multimodal_embedding.py`
+  - `app/storage/qdrant_store.py` (named vectors + optional multivectors path)
+  - `app/rag/ingestion.py` (segment-level multimodal vector writes)
+  - `app/rag/retriever.py` (multimodal dense first-pass + rerank stage)
+  - `app/core/config.py` (provider/model/runtime knobs)
+- Retrieval architecture:
+  - Embedding stage: `Qwen3-VL-Embedding` (2B or 8B).
+  - Reranking stage: `Qwen3-VL-Reranker` (2B or 8B).
+  - Vector DB: Qdrant named vectors for modality-aware search.
+- Tests:
+  - Multimodal ingest/search parity tests (text-image-video).
+  - Cross-modal query tests (text->image/video and image->text retrieval).
+  - Reranker lift tests on top-k precision.
+  - Storage contract tests for named vectors / vector-name routing.
+- Docs updates:
+  - End-to-end architecture + operation guide for multimodal retrieval at scale.
+
+### Risks and Mitigation
+- Risk: ingestion/runtime cost spikes from media-heavy indexing.
+- Mitigation: adaptive frame sampling, pixel/frame caps, and staged retrieval budgets.
+
+- Risk: vector-space drift across modalities.
+- Mitigation: single embedding family for all modalities + reranker consistency checks.
+
+### Rollback/Fallback
+- Fall back to canonical text evidence retrieval when multimodal embedding provider is unavailable.
+
+### Definition of Done
+- One query path can retrieve mixed-modal evidence from one collection.
+- Reranking consistently improves retrieval relevance on multimodal test sets.
+- Existing `/query`, `/vision/analyze`, `/video/analyze` contracts remain backward compatible.
 
 ## M6 - Evaluation and Deployment
 ### Objective

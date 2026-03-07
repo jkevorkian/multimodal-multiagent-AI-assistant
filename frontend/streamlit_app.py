@@ -16,9 +16,19 @@ except Exception:  # pragma: no cover - optional dependency
     paste_image_button = None
 
 try:
-    from frontend.architecture import build_architecture_dot, high_level_flow_points
+    from frontend.architecture import (
+        agent_pipeline_state_rows,
+        build_agents_pipeline_dot,
+        build_architecture_dot,
+        high_level_flow_points,
+    )
 except ModuleNotFoundError:
-    from architecture import build_architecture_dot, high_level_flow_points
+    from architecture import (
+        agent_pipeline_state_rows,
+        build_agents_pipeline_dot,
+        build_architecture_dot,
+        high_level_flow_points,
+    )
 
 
 DEFAULT_BACKEND_URL = "http://localhost:8000"
@@ -217,6 +227,29 @@ def _render_answer_block(title: str, payload: dict[str, Any] | list[Any] | str) 
     st.json(payload)
 
 
+def _extract_agent_execution_from_payload(payload: dict[str, Any] | list[Any] | str) -> tuple[list[str], list[str]]:
+    if not isinstance(payload, dict):
+        return [], []
+    raw_steps = payload.get("steps", [])
+    raw_tool_calls = payload.get("tool_calls", [])
+    steps = [str(item) for item in raw_steps] if isinstance(raw_steps, list) else []
+    tool_calls = [str(item) for item in raw_tool_calls] if isinstance(raw_tool_calls, list) else []
+    return steps, tool_calls
+
+
+def _render_agents_pipeline_helper(latest_payload: dict[str, Any] | list[Any] | str) -> None:
+    steps, tool_calls = _extract_agent_execution_from_payload(latest_payload)
+    st.markdown("### Pipeline Visualizer")
+    st.caption("Graph shows agent stages, execution order, and optional tool branch from research.")
+    st.graphviz_chart(build_agents_pipeline_dot(executed_steps=steps, tool_calls=tool_calls))
+    if steps:
+        st.caption(f"Last run steps: {' -> '.join(steps)}")
+    if tool_calls:
+        st.caption(f"Last run tool calls: {', '.join(tool_calls)}")
+    st.markdown("### Stage Logic and State Changes")
+    st.dataframe(agent_pipeline_state_rows(), hide_index=True, use_container_width=True)
+
+
 def main() -> None:
     st.set_page_config(page_title="MMAA Frontend", page_icon=":material/hub:", layout="wide")
     st.title("Multimodal Multi-Agent Assistant")
@@ -357,23 +390,38 @@ def main() -> None:
                 value="https://example.com/street-scene.mp4",
                 key="impl_video_uri",
             )
+            impl_video_upload = st.file_uploader(
+                "Or upload video for analysis",
+                accept_multiple_files=False,
+                type=["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpeg", "mpg"],
+                key="impl_video_upload",
+            )
             video_prompt = st.text_input("Video prompt (optional)", value="Summarize key events.", key="impl_video_prompt")
             sample_fps = st.number_input("Video sample FPS", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
             max_frames = st.number_input("Video max frames", min_value=1, max_value=1000, value=32, step=1)
             if st.button("Analyze Video", key="impl_video_button"):
-                status_code, body = _request_json(
-                    "POST",
-                    backend_url,
-                    "/video/analyze",
-                    payload={
-                        "video_uri": video_uri,
-                        "prompt": video_prompt or None,
-                        "sample_fps": float(sample_fps),
-                        "max_frames": int(max_frames),
-                    },
-                )
-                _render_response(status_code, body)
-                _render_answer_block("Video Output", body)
+                effective_video_uri = video_uri.strip()
+                if impl_video_upload is not None:
+                    uploaded_sources = _persist_uploaded_files([impl_video_upload])
+                    if uploaded_sources:
+                        effective_video_uri = uploaded_sources[0]
+                        st.info("Using uploaded video file for analysis.")
+                if not effective_video_uri:
+                    st.error("Provide a video URI/path or upload a video file.")
+                else:
+                    status_code, body = _request_json(
+                        "POST",
+                        backend_url,
+                        "/video/analyze",
+                        payload={
+                            "video_uri": effective_video_uri,
+                            "prompt": video_prompt or None,
+                            "sample_fps": float(sample_fps),
+                            "max_frames": int(max_frames),
+                        },
+                    )
+                    _render_response(status_code, body)
+                    _render_answer_block("Video Output", body)
 
     with architecture_tab:
         st.subheader("High-Level Architecture")
@@ -440,6 +488,8 @@ def main() -> None:
     with agents_tab:
         st.subheader("POST /agents/run")
         st.caption("Default agent pipeline: research_agent -> analyst_agent -> answer_agent.")
+        latest_agents_payload = st.session_state.get("last_agents_run_payload", {})
+        _render_agents_pipeline_helper(latest_agents_payload)
         agent_query = st.text_area("Agent query", value="Analyze available context and summarize findings.")
         selected_tools = st.multiselect(
             "Allowed tools (optional)",
@@ -461,6 +511,8 @@ def main() -> None:
             if selected_tools:
                 payload["tools"] = selected_tools
             status_code, body = _request_json("POST", backend_url, "/agents/run", payload=payload)
+            if 200 <= status_code < 300 and isinstance(body, dict):
+                st.session_state["last_agents_run_payload"] = body
             _render_response(status_code, body)
 
     with vision_tab:
@@ -479,22 +531,37 @@ def main() -> None:
     with video_tab:
         st.subheader("POST /video/analyze")
         video_uri = st.text_input("Video URI", value="https://example.com/video.mp4", key="play_video_uri")
+        play_video_upload = st.file_uploader(
+            "Or upload video for /video/analyze",
+            accept_multiple_files=False,
+            type=["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpeg", "mpg"],
+            key="play_video_upload",
+        )
         prompt = st.text_input("Prompt", value="Summarize key temporal events.", key="play_video_prompt")
         sample_fps = st.number_input("Sample FPS", min_value=0.1, max_value=10.0, value=1.0, key="play_video_fps")
         max_frames = st.number_input("Max frames", min_value=1, max_value=1000, value=32, key="play_video_frames")
         if st.button("Run video", key="video_button"):
-            status_code, body = _request_json(
-                "POST",
-                backend_url,
-                "/video/analyze",
-                payload={
-                    "video_uri": video_uri,
-                    "prompt": prompt or None,
-                    "sample_fps": float(sample_fps),
-                    "max_frames": int(max_frames),
-                },
-            )
-            _render_response(status_code, body)
+            effective_video_uri = video_uri.strip()
+            if play_video_upload is not None:
+                uploaded_sources = _persist_uploaded_files([play_video_upload])
+                if uploaded_sources:
+                    effective_video_uri = uploaded_sources[0]
+                    st.info("Using uploaded video file for analysis.")
+            if not effective_video_uri:
+                st.error("Provide a video URI/path or upload a video file.")
+            else:
+                status_code, body = _request_json(
+                    "POST",
+                    backend_url,
+                    "/video/analyze",
+                    payload={
+                        "video_uri": effective_video_uri,
+                        "prompt": prompt or None,
+                        "sample_fps": float(sample_fps),
+                        "max_frames": int(max_frames),
+                    },
+                )
+                _render_response(status_code, body)
 
     with metrics_tab:
         st.subheader("GET /metrics")
