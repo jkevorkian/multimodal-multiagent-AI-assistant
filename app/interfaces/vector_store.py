@@ -12,3 +12,6 @@ class VectorStore(Protocol):
 
     async def keyword_search(self, query: str, top_k: int) -> list[dict]:
         ...
+
+    async def list_indexed_sources(self, limit: int = 200) -> list[dict]:
+        ...

@@ -71,6 +71,8 @@ INGEST_UPLOAD_TYPES = [
     "mpeg",
     "mpg",
 ]
+IMAGE_UPLOAD_TYPES = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"]
+VIDEO_UPLOAD_TYPES = ["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpeg", "mpg"]
 
 
 def _request_json(
@@ -274,13 +276,25 @@ def main() -> None:
         architecture_tab,
         health_tab,
         ingest_tab,
+        indexed_sources_tab,
         query_tab,
         agents_tab,
         vision_tab,
         video_tab,
         metrics_tab,
     ) = st.tabs(
-        ["Implementation", "Architecture", "Health", "Ingest", "Query", "Agents", "Vision", "Video", "Metrics"]
+        [
+            "Implementation",
+            "Architecture",
+            "Health",
+            "Ingest",
+            "Indexed Sources",
+            "Query",
+            "Agents",
+            "Vision",
+            "Video",
+            "Metrics",
+        ]
     )
 
     with implementation_tab:
@@ -373,16 +387,31 @@ def main() -> None:
                 value="https://example.com/traffic-sign.jpg",
                 key="impl_image_uri",
             )
+            impl_image_upload = st.file_uploader(
+                "Or upload image for analysis",
+                accept_multiple_files=False,
+                type=IMAGE_UPLOAD_TYPES,
+                key="impl_image_upload",
+            )
             image_prompt = st.text_input("Image prompt (optional)", value="Describe key entities.", key="impl_image_prompt")
             if st.button("Analyze Image", key="impl_image_button"):
-                status_code, body = _request_json(
-                    "POST",
-                    backend_url,
-                    "/vision/analyze",
-                    payload={"image_uri": image_uri, "prompt": image_prompt or None},
-                )
-                _render_response(status_code, body)
-                _render_answer_block("Vision Output", body)
+                effective_image_uri = image_uri.strip()
+                if impl_image_upload is not None:
+                    uploaded_sources = _persist_uploaded_files([impl_image_upload])
+                    if uploaded_sources:
+                        effective_image_uri = uploaded_sources[0]
+                        st.info("Using uploaded image file for analysis.")
+                if not effective_image_uri:
+                    st.error("Provide an image URI/path or upload an image file.")
+                else:
+                    status_code, body = _request_json(
+                        "POST",
+                        backend_url,
+                        "/vision/analyze",
+                        payload={"image_uri": effective_image_uri, "prompt": image_prompt or None},
+                    )
+                    _render_response(status_code, body)
+                    _render_answer_block("Vision Output", body)
 
         with right:
             video_uri = st.text_input(
@@ -393,7 +422,7 @@ def main() -> None:
             impl_video_upload = st.file_uploader(
                 "Or upload video for analysis",
                 accept_multiple_files=False,
-                type=["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpeg", "mpg"],
+                type=VIDEO_UPLOAD_TYPES,
                 key="impl_video_upload",
             )
             video_prompt = st.text_input("Video prompt (optional)", value="Summarize key events.", key="impl_video_prompt")
@@ -472,6 +501,43 @@ def main() -> None:
                 )
                 _render_response(status_code, body)
 
+    with indexed_sources_tab:
+        st.subheader("GET /ingest/sources")
+        st.caption("Inspect indexed source coverage, chunking ranges, modality, and sample snippet.")
+        if st.button("Refresh indexed sources", key="indexed_sources_refresh_button"):
+            status_code, body = _request_json("GET", backend_url, "/ingest/sources")
+            if 200 <= status_code < 300 and isinstance(body, dict):
+                st.session_state["indexed_sources_payload"] = body
+            _render_response(status_code, body)
+
+        payload = st.session_state.get("indexed_sources_payload", {})
+        if isinstance(payload, dict):
+            raw_sources = payload.get("sources", [])
+            if isinstance(raw_sources, list) and raw_sources:
+                total_chunks = sum(int(item.get("chunk_count", 0) or 0) for item in raw_sources if isinstance(item, dict))
+                modalities = sorted(
+                    {
+                        str(item.get("modality", "text"))
+                        for item in raw_sources
+                        if isinstance(item, dict) and str(item.get("modality", "")).strip()
+                    }
+                )
+                st.caption(f"Indexed sources: {len(raw_sources)} | Total chunks: {total_chunks}")
+                modality_filter = st.selectbox(
+                    "Filter by modality",
+                    options=["all"] + modalities,
+                    key="indexed_sources_modality_filter",
+                )
+                filtered_sources = [
+                    item
+                    for item in raw_sources
+                    if isinstance(item, dict)
+                    and (modality_filter == "all" or str(item.get("modality", "text")) == modality_filter)
+                ]
+                st.dataframe(filtered_sources, hide_index=True, use_container_width=True)
+            else:
+                st.info("No indexed sources found yet. Run ingestion first and then refresh.")
+
     with query_tab:
         st.subheader("POST /query")
         query_text = st.text_input("Query", value="What is this project about?")
@@ -518,15 +584,30 @@ def main() -> None:
     with vision_tab:
         st.subheader("POST /vision/analyze")
         image_uri = st.text_input("Image URI", value="https://example.com/image.png", key="play_image_uri")
+        play_image_upload = st.file_uploader(
+            "Or upload image for /vision/analyze",
+            accept_multiple_files=False,
+            type=IMAGE_UPLOAD_TYPES,
+            key="play_image_upload",
+        )
         prompt = st.text_input("Prompt", value="Describe relevant visual evidence.", key="play_image_prompt")
         if st.button("Run vision", key="vision_button"):
-            status_code, body = _request_json(
-                "POST",
-                backend_url,
-                "/vision/analyze",
-                payload={"image_uri": image_uri, "prompt": prompt or None},
-            )
-            _render_response(status_code, body)
+            effective_image_uri = image_uri.strip()
+            if play_image_upload is not None:
+                uploaded_sources = _persist_uploaded_files([play_image_upload])
+                if uploaded_sources:
+                    effective_image_uri = uploaded_sources[0]
+                    st.info("Using uploaded image file for analysis.")
+            if not effective_image_uri:
+                st.error("Provide an image URI/path or upload an image file.")
+            else:
+                status_code, body = _request_json(
+                    "POST",
+                    backend_url,
+                    "/vision/analyze",
+                    payload={"image_uri": effective_image_uri, "prompt": prompt or None},
+                )
+                _render_response(status_code, body)
 
     with video_tab:
         st.subheader("POST /video/analyze")
@@ -534,7 +615,7 @@ def main() -> None:
         play_video_upload = st.file_uploader(
             "Or upload video for /video/analyze",
             accept_multiple_files=False,
-            type=["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpeg", "mpg"],
+            type=VIDEO_UPLOAD_TYPES,
             key="play_video_upload",
         )
         prompt = st.text_input("Prompt", value="Summarize key temporal events.", key="play_video_prompt")

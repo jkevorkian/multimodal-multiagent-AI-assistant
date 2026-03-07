@@ -28,6 +28,23 @@ class IngestResponse(BaseModel):
     trace: Trace
 
 
+class IndexedSourceInfo(BaseModel):
+    source: str
+    modality: str
+    chunk_count: int
+    min_chunk_id: int | None = None
+    max_chunk_id: int | None = None
+    min_offset: int | None = None
+    max_offset: int | None = None
+    sample_snippet: str | None = None
+
+
+class IndexedSourcesResponse(BaseModel):
+    count: int
+    sources: list[IndexedSourceInfo]
+    trace: Trace
+
+
 class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)

@@ -140,6 +140,111 @@ def test_openai_vision_client_serializes_file_uri_as_data_url(tmp_path) -> None:
     assert encoded.startswith("data:image/png;base64,")
 
 
+def test_openai_vision_client_serializes_remote_image_url_as_data_url(monkeypatch) -> None:
+    class _FakeResponse:
+        def __init__(self, payload: bytes, content_type: str) -> None:
+            self._payload = payload
+            self.headers = {"Content-Type": content_type}
+
+        def read(self, max_bytes: int | None = None) -> bytes:
+            if max_bytes is None:
+                return self._payload
+            return self._payload[:max_bytes]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    def _fake_urlopen(request, timeout: float = 10.0):  # noqa: ARG001
+        url = str(getattr(request, "full_url", request))
+        assert "example.com" in url
+        return _FakeResponse(b"\x89PNG\r\n\x1a\npayload", "image/png")
+
+    monkeypatch.setattr("app.multimodal.clients.urlopen", _fake_urlopen)
+
+    client = OpenAIVisionClient(model="qwen3-vl:2b", base_url="http://localhost:11434/v1")
+    encoded = client._prepare_image_url("https://example.com/image.png")
+    assert encoded.startswith("data:image/png;base64,")
+
+
+def test_openai_vision_client_empty_provider_output_falls_back_to_hint(monkeypatch) -> None:
+    class _Response:
+        class _Choice:
+            class _Message:
+                content = ""
+
+            message = _Message()
+
+        choices = [_Choice()]
+
+    class _Completions:
+        async def create(self, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    client = OpenAIVisionClient(model="qwen3-vl:2b", base_url="http://localhost:11434/v1")
+    monkeypatch.setattr(client, "_get_client", lambda: _Client())
+
+    summary = asyncio.run(client.analyze_image("https://example.com/cat-photo.jpg", prompt="Describe"))
+    assert "empty response" in summary.lower()
+    assert "cat" in summary.lower()
+
+
+def test_openai_vision_client_remote_url_rejection_raises_actionable_error(monkeypatch) -> None:
+    class _Completions:
+        async def create(self, **kwargs):  # noqa: ARG002
+            raise RuntimeError("Error code: 400 - image URLs are not currently supported")
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    client = OpenAIVisionClient(model="qwen3-vl:2b", base_url="http://localhost:11434/v1")
+    monkeypatch.setattr(client, "_get_client", lambda: _Client())
+    monkeypatch.setattr(client, "_fetch_remote_image_data_uri", lambda _uri: None)
+
+    with pytest.raises(ValueError, match="does not accept remote image URLs"):
+        asyncio.run(client.analyze_image("https://example.com/scene.jpg", prompt="Describe"))
+
+
+def test_openai_vision_client_uses_reasoning_when_content_is_empty(monkeypatch) -> None:
+    class _Response:
+        class _Choice:
+            class _Message:
+                content = ""
+                reasoning = "Detected a dashboard with charts and a highlighted warning banner."
+
+            message = _Message()
+
+        choices = [_Choice()]
+
+    class _Completions:
+        async def create(self, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    client = OpenAIVisionClient(model="qwen3-vl:2b", base_url="http://localhost:11434/v1")
+    monkeypatch.setattr(client, "_get_client", lambda: _Client())
+
+    summary = asyncio.run(client.analyze_image("https://example.com/screen.png", prompt="Describe"))
+    assert "dashboard" in summary.lower()
+    assert "warning banner" in summary.lower()
+
+
 def test_image_and_video_are_ingested_with_modality_metadata(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("app.video.frame_sampler._load_cv2", lambda: _FakeCV2())
     video_path = tmp_path / "demo.mp4"

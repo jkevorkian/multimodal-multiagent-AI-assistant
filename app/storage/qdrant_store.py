@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.storage.index_summary import summarize_indexed_sources
+
 
 @dataclass
 class _MetadataRecord:
@@ -135,6 +137,18 @@ class QdrantVectorStore:
         scored.sort(key=lambda row: row["score"], reverse=True)
         return scored[:top_k]
 
+    async def list_indexed_sources(self, limit: int = 200) -> list[dict]:
+        if limit <= 0:
+            return []
+        if not self._enabled:
+            raise RuntimeError("Qdrant store is not enabled")
+
+        if not self._metadata_cache:
+            self._warm_metadata_cache(max_points=max(2000, limit * 20))
+
+        metadata_rows = [dict(record.metadata) for record in self._metadata_cache.values()]
+        return summarize_indexed_sources(metadata_rows, limit=limit)
+
     def _try_initialize(self) -> bool:
         try:
             from qdrant_client import QdrantClient
@@ -161,3 +175,55 @@ class QdrantVectorStore:
             self._client = None
             self._models = None
             return False
+
+    def _warm_metadata_cache(self, max_points: int = 5000) -> None:
+        if not self._enabled or max_points <= 0:
+            return
+
+        assert self._client is not None
+        offset: Any = None
+        scanned = 0
+
+        while scanned < max_points:
+            batch_limit = min(256, max_points - scanned)
+            try:
+                result = self._client.scroll(
+                    collection_name=self._collection_name,
+                    limit=batch_limit,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset,
+                )
+            except TypeError:
+                result = self._client.scroll(
+                    collection_name=self._collection_name,
+                    limit=batch_limit,
+                    with_payload=True,
+                    offset=offset,
+                )
+            except Exception:
+                return
+
+            if isinstance(result, tuple):
+                points, next_offset = result
+            else:
+                points = getattr(result, "points", []) or []
+                next_offset = getattr(result, "next_page_offset", None)
+
+            if not points:
+                break
+
+            for point in points:
+                identifier = str(getattr(point, "id", ""))
+                payload = dict(getattr(point, "payload", {}) or {})
+                if identifier:
+                    self._metadata_cache[identifier] = _MetadataRecord(id=identifier, metadata=payload)
+                scanned += 1
+                if scanned >= max_points:
+                    break
+
+            if scanned >= max_points:
+                break
+            if not next_offset:
+                break
+            offset = next_offset

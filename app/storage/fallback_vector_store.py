@@ -41,3 +41,16 @@ class FallbackVectorStore:
             return await self._primary.keyword_search(query=query, top_k=top_k)
         except Exception:
             return []
+
+    async def list_indexed_sources(self, limit: int = 200) -> list[dict]:
+        try:
+            secondary_results = await self._secondary.list_indexed_sources(limit=limit)
+            if secondary_results:
+                return secondary_results
+        except Exception:
+            pass
+
+        try:
+            return await self._primary.list_indexed_sources(limit=limit)
+        except Exception:
+            return []

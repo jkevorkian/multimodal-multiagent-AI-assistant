@@ -45,6 +45,7 @@ digraph MMAA {
         video_adapter [label="VideoAnalysisAdapter"];
         vision [label="/vision/analyze"];
         video [label="/video/analyze"];
+        ingest_sources [label="/ingest/sources"];
         mm_clients [label="Multimodal Clients\\n(OpenAI vision / heuristic fallback)"];
     }
 
@@ -68,6 +69,7 @@ digraph MMAA {
     streamlit -> api [label="HTTP JSON"];
 
     api -> ingestion [label="/ingest/documents"];
+    api -> ingest_sources;
     api -> retriever [label="/query"];
     api -> orchestrator [label="/agents/run"];
     api -> tool_catalog;
@@ -77,6 +79,7 @@ digraph MMAA {
     ingestion -> embeddings;
     embeddings -> store;
     retriever -> store;
+    ingest_sources -> store [style=dashed];
 
     orchestrator -> research;
     orchestrator -> analyst;
@@ -170,6 +173,7 @@ def high_level_flow_points() -> list[str]:
     return [
         "User interacts with Streamlit, which calls FastAPI endpoints over HTTP.",
         "RAG path: ingest -> chunk -> embed -> persist -> retrieve -> answer with citations.",
+        "Indexed Sources path: /ingest/sources summarizes what is currently stored in the vector layer.",
         "Agent path: LangGraph orchestrator executes research, analysis, and answer stages with bounded tools.",
         "Tool calls are routed through the registry with timeout/retry controls; /agents/tools exposes discoverable tool names/descriptions.",
         "LLM path uses provider selection: OpenAI when configured, grounded heuristic fallback otherwise.",

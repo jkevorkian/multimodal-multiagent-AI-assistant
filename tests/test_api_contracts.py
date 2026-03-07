@@ -14,6 +14,7 @@ def test_required_routes_registered() -> None:
     expected_paths = {
         "/health",
         "/ingest/documents",
+        "/ingest/sources",
         "/query",
         "/agents/run",
         "/agents/tools",
@@ -45,6 +46,16 @@ def test_ingest_contract() -> None:
         assert payload["accepted_sources"] == 1
         assert payload["indexed_chunks"] > 0
         assert "trace" in payload
+
+
+def test_ingest_sources_contract() -> None:
+    response = client.get("/ingest/sources")
+    payload = response.json()
+    assert response.status_code == 200
+    assert "count" in payload
+    assert "sources" in payload
+    assert "trace" in payload
+    assert isinstance(payload["sources"], list)
 
 
 def test_query_contract() -> None:

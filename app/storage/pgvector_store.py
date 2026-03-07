@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.rag.embeddings import cosine_similarity
+from app.storage.index_summary import summarize_indexed_sources
 
 
 @dataclass
@@ -119,6 +120,22 @@ class PgVectorStore:
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
+    async def list_indexed_sources(self, limit: int = 200) -> list[dict]:
+        if limit <= 0:
+            return []
+
+        metadata_rows: list[dict[str, Any]] = []
+        if self._use_postgres:
+            try:
+                metadata_rows = self._list_metadata_postgres()
+            except Exception:
+                self._use_postgres = False
+
+        if not metadata_rows:
+            metadata_rows = [dict(record.metadata) for record in self._records.values()]
+
+        return summarize_indexed_sources(metadata_rows, limit=limit)
+
     def _try_enable_postgres(self) -> None:
         if not self._database_url:
             return
@@ -209,6 +226,15 @@ class PgVectorStore:
             cursor.execute(statement, (query, query, top_k))
             rows = cursor.fetchall()
         return [{"id": row[0], "metadata": row[1] or {}, "score": float(row[2] or 0.0)} for row in rows]
+
+    def _list_metadata_postgres(self) -> list[dict[str, Any]]:
+        assert self._connection is not None
+
+        statement = f"SELECT metadata FROM {self._table_name}"
+        with self._connection.cursor() as cursor:
+            cursor.execute(statement)
+            rows = cursor.fetchall()
+        return [dict(row[0] or {}) for row in rows]
 
     @staticmethod
     def _vector_literal(vector: list[float]) -> str:

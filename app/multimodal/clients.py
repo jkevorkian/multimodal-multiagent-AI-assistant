@@ -8,9 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 
 from app.interfaces.video import VideoClient
 from app.interfaces.vision import VisionClient
+from app.multimodal.vision_adapters import (
+    VisionResponseAdapter,
+    build_vision_response_adapter,
+)
 
 
 @dataclass(frozen=True)
@@ -56,37 +61,53 @@ class OpenAIVisionClient:
         api_key: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 300,
+        remote_fetch_timeout_sec: float = 10.0,
+        max_remote_image_bytes: int = 5_000_000,
+        response_adapter: VisionResponseAdapter | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
         self._base_url = base_url
         self._max_tokens = max_tokens
+        self._remote_fetch_timeout_sec = remote_fetch_timeout_sec
+        self._max_remote_image_bytes = max_remote_image_bytes
+        self._response_adapter = response_adapter or build_vision_response_adapter(model)
         self._client: Any | None = None
 
     async def analyze_image(self, image_uri: str, prompt: str | None = None) -> str:
         client = self._get_client()
         instruction = prompt or "Describe the image focusing on entities, actions, and salient details."
         image_payload = self._prepare_image_url(image_uri)
-        response = await client.chat.completions.create(
-            model=self._model,
-            temperature=0.1,
-            max_tokens=self._max_tokens,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": instruction},
-                        {"type": "image_url", "image_url": {"url": image_payload}},
-                    ],
-                }
-            ],
-        )
-        content = response.choices[0].message.content
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return content.strip()
-        return str(content).strip()
+        try:
+            response = await client.chat.completions.create(
+                model=self._model,
+                temperature=0.1,
+                max_tokens=self._max_tokens,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": instruction},
+                            {"type": "image_url", "image_url": {"url": image_payload}},
+                        ],
+                    }
+                ],
+            )
+        except Exception as exc:
+            parsed = urlparse(image_uri)
+            if (
+                parsed.scheme in {"http", "https"}
+                and image_payload == image_uri
+                and self._response_adapter.is_remote_url_unsupported_error(exc)
+            ):
+                raise ValueError(
+                    "The configured vision model does not accept remote image URLs directly and "
+                    "the server could not fetch that URL into a data URI. "
+                    "Use an accessible direct image URL or upload the image file."
+                ) from exc
+            raise
+        extracted = self._response_adapter.extract_text(response)
+        return extracted or self._empty_response_fallback(image_uri)
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -101,7 +122,10 @@ class OpenAIVisionClient:
 
     def _prepare_image_url(self, image_uri: str) -> str:
         parsed = urlparse(image_uri)
-        if parsed.scheme in {"http", "https", "data"}:
+        if parsed.scheme in {"http", "https"}:
+            remote_data_uri = self._fetch_remote_image_data_uri(image_uri)
+            return remote_data_uri or image_uri
+        if parsed.scheme == "data":
             return image_uri
         file_path = self._resolve_local_path(image_uri, parsed)
         if file_path is None:
@@ -109,6 +133,41 @@ class OpenAIVisionClient:
         media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
         return f"data:{media_type};base64,{encoded}"
+
+    def _fetch_remote_image_data_uri(self, image_uri: str) -> str | None:
+        request = Request(
+            image_uri,
+            headers={
+                "User-Agent": "MMAA-VisionClient/0.1",
+                "Accept": "image/*,*/*;q=0.8",
+            },
+        )
+        try:
+            with urlopen(request, timeout=self._remote_fetch_timeout_sec) as response:
+                payload = response.read(self._max_remote_image_bytes + 1)
+                content_type = response.headers.get("Content-Type", "")
+        except Exception:
+            return None
+
+        if not payload or len(payload) > self._max_remote_image_bytes:
+            return None
+
+        media_type = content_type.split(";", maxsplit=1)[0].strip().lower()
+        if not media_type.startswith("image/"):
+            guessed = mimetypes.guess_type(image_uri)[0] or ""
+            media_type = guessed if guessed.startswith("image/") else ""
+        if not media_type:
+            return None
+
+        encoded = base64.b64encode(payload).decode("ascii")
+        return f"data:{media_type};base64,{encoded}"
+
+    def _empty_response_fallback(self, image_uri: str) -> str:
+        parsed = urlparse(image_uri)
+        filename = Path(parsed.path).name or image_uri
+        tags = re.findall(r"[a-z0-9]+", filename.lower())
+        hint = ", ".join(tags[:5]) if tags else "unknown-subject"
+        return f"Image analyzed ({hint}) but model returned an empty response."
 
     def _resolve_local_path(self, image_uri: str, parsed_uri) -> Path | None:
         if parsed_uri.scheme == "file":
