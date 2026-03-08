@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -115,6 +117,36 @@ def _request_text(
         return response.status_code, response.text
     except httpx.HTTPError as error:
         return 0, {"error": str(error), "url": url}
+
+
+def _request_json_direct(
+    method: str,
+    base_url: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    timeout_sec: float = REQUEST_TIMEOUT_SEC,
+) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    url = f"{base_url.rstrip('/')}{path}"
+    try:
+        with httpx.Client(timeout=timeout_sec) as client:
+            response = client.request(method=method, url=url, json=payload)
+        try:
+            body: dict[str, Any] | list[Any] | str = response.json()
+        except ValueError:
+            body = response.text
+        return response.status_code, body
+    except httpx.HTTPError as error:
+        return 0, {"error": str(error), "url": url}
+
+
+def _status_box_markdown(run_id: str, state: str, status_text: str) -> str:
+    return (
+        "```text\n"
+        f"Run ID: {run_id}\n"
+        f"State: {state}\n"
+        f"Status: {status_text}\n"
+        "```"
+    )
 
 
 def _render_response(status_code: int, body: dict[str, Any] | list[Any] | str) -> None:
@@ -331,6 +363,74 @@ def _fetch_run_events(base_url: str, run_id: str, after_sequence: int = 0) -> tu
     return status_code, _parse_sse_events(body), None
 
 
+def _run_agents_with_live_status(backend_url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    run_id = str(payload.get("run_id", "")).strip() or str(uuid.uuid4())
+    payload_with_run_id = dict(payload)
+    payload_with_run_id["run_id"] = run_id
+    timeout_sec = float(st.session_state.get("request_timeout_sec", REQUEST_TIMEOUT_SEC))
+
+    result: dict[str, Any] = {"status_code": None, "body": None}
+
+    def _worker() -> None:
+        status_code, body = _request_json_direct(
+            "POST",
+            backend_url,
+            "/agents/run",
+            payload=payload_with_run_id,
+            timeout_sec=timeout_sec,
+        )
+        result["status_code"] = status_code
+        result["body"] = body
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+
+    live_box = st.empty()
+    state = "running"
+    status_text = "Starting run..."
+    live_box.markdown(_status_box_markdown(run_id, state, status_text))
+
+    while worker.is_alive():
+        status_code, body = _fetch_run_status(backend_url, run_id)
+        if 200 <= status_code < 300 and isinstance(body, dict):
+            state = str(body.get("state", "running"))
+            status_text = str(body.get("status_text", "Running..."))
+            st.session_state["last_agents_run_status"] = body
+        live_box.markdown(_status_box_markdown(run_id, state, status_text))
+        time.sleep(0.5)
+
+    worker.join(timeout=0.1)
+    status_code = int(result.get("status_code", 0) or 0)
+    body = result.get("body", {"error": "run_worker_failed"})
+
+    final_status_code, final_status = _fetch_run_status(backend_url, run_id)
+    if 200 <= final_status_code < 300 and isinstance(final_status, dict):
+        st.session_state["last_agents_run_status"] = final_status
+        state = str(final_status.get("state", "completed"))
+        status_text = str(final_status.get("status_text", "Run finished."))
+    elif status_code == 0:
+        state = "failed"
+        status_text = "Request failed before reaching backend."
+    elif 200 <= status_code < 300:
+        state = "completed"
+        status_text = "Run completed."
+    else:
+        state = "failed"
+        status_text = f"Run failed (HTTP {status_code})."
+
+    live_box.markdown(_status_box_markdown(run_id, state, status_text))
+
+    if 200 <= status_code < 300 and isinstance(body, dict):
+        st.session_state["last_agents_run_id"] = run_id
+        st.session_state["agents_runtime_run_id"] = run_id
+        st.session_state["last_agents_run_payload"] = body
+        events_fetch_code, events_payload, _ = _fetch_run_events(backend_url, run_id, after_sequence=0)
+        if 200 <= events_fetch_code < 300:
+            st.session_state["last_agents_run_events"] = events_payload
+
+    return status_code, body
+
+
 def _render_agents_pipeline_helper(latest_payload: dict[str, Any] | list[Any] | str) -> None:
     steps, tool_calls = _extract_agent_execution_from_payload(latest_payload)
     st.markdown("### Pipeline Visualizer")
@@ -361,63 +461,26 @@ def _render_agents_runtime_live_helper(backend_url: str) -> None:
     if run_id and run_id != default_run_id:
         st.session_state["last_agents_run_id"] = run_id
 
-    left, right = st.columns(2)
-    with left:
-        if st.button("Refresh status", key="agents_refresh_status"):
-            if not run_id:
-                st.error("Provide a run ID first.")
+    if st.button("Refresh status", key="agents_refresh_status"):
+        if not run_id:
+            st.error("Provide a run ID first.")
+        else:
+            status_code, body = _fetch_run_status(backend_url, run_id)
+            if 200 <= status_code < 300 and isinstance(body, dict):
+                st.session_state["last_agents_run_status"] = body
             else:
-                status_code, body = _fetch_run_status(backend_url, run_id)
-                if 200 <= status_code < 300 and isinstance(body, dict):
-                    st.session_state["last_agents_run_status"] = body
-                else:
-                    st.error(f"Failed to fetch status (HTTP {status_code}).")
-                    if body:
-                        st.code(str(body), language="text")
-    with right:
-        if st.button("Fetch all events", key="agents_fetch_events"):
-            if not run_id:
-                st.error("Provide a run ID first.")
-            else:
-                status_code, events, error = _fetch_run_events(backend_url, run_id, after_sequence=0)
-                if 200 <= status_code < 300:
-                    st.session_state["last_agents_run_events"] = events
-                    if events:
-                        st.session_state["last_agents_run_last_sequence"] = int(
-                            max(int(item.get("sequence_number", 0)) for item in events)
-                        )
-                else:
-                    st.error(f"Failed to fetch events (HTTP {status_code}).")
-                    if error:
-                        st.code(error, language="text")
+                st.error(f"Failed to fetch status (HTTP {status_code}).")
+                if body:
+                    st.code(str(body), language="text")
 
     status_payload = st.session_state.get("last_agents_run_status", {})
-    if isinstance(status_payload, dict) and status_payload.get("run_id"):
-        st.caption(
-            "Status: "
-            f"{status_payload.get('state', 'unknown')} | "
-            f"{status_payload.get('status_text', '')}"
-        )
-        st.json(status_payload)
+    if isinstance(status_payload, dict) and str(status_payload.get("run_id", "")).strip():
+        box_run_id = str(status_payload.get("run_id", run_id)).strip() or run_id or "unknown"
+        box_state = str(status_payload.get("state", "unknown"))
+        box_text = str(status_payload.get("status_text", "No status text"))
+        st.markdown(_status_box_markdown(box_run_id, box_state, box_text))
     else:
-        st.info("No status snapshot loaded yet.")
-
-    raw_events = st.session_state.get("last_agents_run_events", [])
-    parsed_events = [item for item in raw_events if isinstance(item, dict)]
-    if parsed_events:
-        timeline_rows = [
-            {
-                "seq": int(item.get("sequence_number", 0)),
-                "type": str(item.get("event_type", "")),
-                "status_text": str(item.get("status_text", "")),
-                "agent": str(item.get("agent", "") or ""),
-                "tool": str(item.get("tool", "") or ""),
-            }
-            for item in parsed_events
-        ]
-        st.dataframe(timeline_rows, hide_index=True, use_container_width=True)
-    else:
-        st.info("No events loaded yet.")
+        st.info("No live status loaded yet.")
 
 
 def main() -> None:
@@ -543,7 +606,7 @@ def main() -> None:
                 payload: dict[str, Any] = {"query": impl_query}
                 if impl_tools:
                     payload["tools"] = impl_tools
-                status_code, body = _request_json("POST", backend_url, "/agents/run", payload=payload)
+                status_code, body = _run_agents_with_live_status(backend_url, payload)
                 if 200 <= status_code < 300 and isinstance(body, dict):
                     run_id_value = str(body.get("run_id", "")).strip()
                     if run_id_value:
@@ -752,23 +815,7 @@ def main() -> None:
             payload: dict[str, Any] = {"query": agent_query}
             if selected_tools:
                 payload["tools"] = selected_tools
-            status_code, body = _request_json("POST", backend_url, "/agents/run", payload=payload)
-            if 200 <= status_code < 300 and isinstance(body, dict):
-                st.session_state["last_agents_run_payload"] = body
-                run_id_value = str(body.get("run_id", "")).strip()
-                if run_id_value:
-                    st.session_state["last_agents_run_id"] = run_id_value
-                    st.session_state["agents_runtime_run_id"] = run_id_value
-                    status_fetch_code, status_payload = _fetch_run_status(backend_url, run_id_value)
-                    if 200 <= status_fetch_code < 300 and isinstance(status_payload, dict):
-                        st.session_state["last_agents_run_status"] = status_payload
-                    events_fetch_code, events_payload, _ = _fetch_run_events(backend_url, run_id_value, after_sequence=0)
-                    if 200 <= events_fetch_code < 300:
-                        st.session_state["last_agents_run_events"] = events_payload
-                        if events_payload:
-                            st.session_state["last_agents_run_last_sequence"] = int(
-                                max(int(item.get("sequence_number", 0)) for item in events_payload)
-                            )
+            status_code, body = _run_agents_with_live_status(backend_url, payload)
             _render_response(status_code, body)
 
     with vision_tab:
