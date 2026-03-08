@@ -39,6 +39,11 @@ class InMemoryEventBus:
         stream = await self._get_or_create_stream(run_id)
         async with stream.condition:
             stream.sequence += 1
+            normalized_metadata = self._normalize_metadata(
+                event_type=event_type,
+                status_text=status_text,
+                metadata=metadata,
+            )
             event = RuntimeEvent(
                 run_id=run_id,
                 trace_id=trace_id,
@@ -48,7 +53,7 @@ class InMemoryEventBus:
                 status_text=status_text,
                 agent=agent,
                 tool=tool,
-                metadata=metadata or {},
+                metadata=normalized_metadata,
             )
             stream.events.append(event)
             if len(stream.events) > self._max_events_per_run:
@@ -121,6 +126,32 @@ class InMemoryEventBus:
                 stream = _RunEventStream()
                 self._streams[run_id] = stream
             return stream
+
+    def _normalize_metadata(
+        self,
+        *,
+        event_type: RuntimeEventType,
+        status_text: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        payload = dict(metadata or {})
+        payload.setdefault("event_family", self._event_family(event_type))
+        payload.setdefault("summary_text", status_text)
+        return payload
+
+    @staticmethod
+    def _event_family(event_type: RuntimeEventType) -> str:
+        if event_type.startswith("tool.call"):
+            return "tool"
+        if event_type.startswith("agent.step"):
+            return "stage"
+        if event_type == "model.call.in_progress":
+            return "model_reasoning"
+        if event_type == "agent.revision.requested":
+            return "revision"
+        if event_type in {"run.guardrail_triggered", "run.failed"}:
+            return "guardrail"
+        return "run"
 
 
 @lru_cache

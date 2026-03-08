@@ -6,6 +6,7 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
@@ -92,11 +93,17 @@ class DocumentIngestionService:
         self._video_max_remote_source_bytes = video_max_remote_source_bytes
         self._video_require_frame_findings = video_require_frame_findings
 
-    async def ingest(self, sources: list[str], source_type: str = "mixed") -> IngestionSummary:
+    async def ingest(
+        self,
+        sources: list[str],
+        source_type: str = "mixed",
+        metadata_overrides: dict[str, Any] | None = None,
+    ) -> IngestionSummary:
         ids: list[str] = []
         vectors: list[list[float]] = []
         metadata: list[dict] = []
         accepted_sources = 0
+        safe_metadata_overrides = dict(metadata_overrides or {})
 
         for source in sources:
             modality = self._resolve_modality(source=source, source_type=source_type)
@@ -127,6 +134,7 @@ class DocumentIngestionService:
                         "offset": chunk.offset,
                         "snippet": chunk.text,
                         "modality": modality,
+                        **safe_metadata_overrides,
                     }
                 )
 

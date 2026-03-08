@@ -13,6 +13,11 @@ client = TestClient(app)
 def test_required_routes_registered() -> None:
     expected_paths = {
         "/health",
+        "/chat/sessions",
+        "/chat/sessions/{chat_id}",
+        "/chat/sessions/{chat_id}/messages",
+        "/chat/sessions/{chat_id}/files",
+        "/chat/sessions/{chat_id}/runs/{run_id}/events",
         "/ingest/documents",
         "/ingest/sources",
         "/query",
@@ -189,3 +194,23 @@ def test_trace_headers_added() -> None:
     response = client.get("/health")
     assert response.headers.get("x-request-id")
     assert response.headers.get("x-trace-id")
+
+
+def test_chat_session_contract() -> None:
+    create = client.post("/chat/sessions", json={"title": "Contract Chat"})
+    assert create.status_code == 200
+    created = create.json()
+    chat_id = created["chat_id"]
+    assert created["title"] == "Contract Chat"
+
+    listed = client.get("/chat/sessions")
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert "sessions" in payload
+    assert any(item.get("chat_id") == chat_id for item in payload.get("sessions", []))
+
+    messages = client.get(f"/chat/sessions/{chat_id}/messages")
+    assert messages.status_code == 200
+    messages_payload = messages.json()
+    assert messages_payload["chat_id"] == chat_id
+    assert isinstance(messages_payload["messages"], list)

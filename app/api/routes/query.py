@@ -51,7 +51,11 @@ async def query(
 ) -> QueryResponse:
     steering_resolution = resolve_profile(payload.steering)
     try:
-        context = await container.retriever.retrieve(payload.query, payload.top_k)
+        context = await container.retriever.retrieve(
+            payload.query,
+            payload.top_k,
+            metadata_filter=payload.metadata_filter,
+        )
     except Exception:
         context = []
     snippets = [cleaned for item in context if item.get("snippet") for cleaned in [_clean_snippet(item["snippet"])] if cleaned]

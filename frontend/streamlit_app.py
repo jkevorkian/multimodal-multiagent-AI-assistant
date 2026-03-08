@@ -363,10 +363,49 @@ def _fetch_run_events(base_url: str, run_id: str, after_sequence: int = 0) -> tu
     return status_code, _parse_sse_events(body), None
 
 
-def _run_agents_with_live_status(backend_url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any] | list[Any] | str]:
-    run_id = str(payload.get("run_id", "")).strip() or str(uuid.uuid4())
+def _format_runtime_event_line(event: dict[str, Any]) -> str:
+    sequence = int(event.get("sequence_number", 0) or 0)
+    event_type = str(event.get("event_type", "event"))
+    status_text = str(event.get("status_text", "")).strip()
+    metadata = event.get("metadata", {})
+    metadata_parts: list[str] = []
+    if isinstance(metadata, dict):
+        if metadata.get("retrieved_chunks") is not None:
+            metadata_parts.append(f"retrieved_chunks={metadata.get('retrieved_chunks')}")
+        if metadata.get("retrieval_preview"):
+            preview = metadata["retrieval_preview"]
+            if isinstance(preview, list):
+                compact = "; ".join(
+                    f"{str(item.get('source', 'unknown'))}#chunk-{int(item.get('chunk_id', -1))}: {str(item.get('snippet', ''))[:80]}"
+                    for item in preview[:3]
+                    if isinstance(item, dict)
+                )
+                if compact:
+                    metadata_parts.append(f"evidence={compact}")
+        if metadata.get("analysis_trace"):
+            trace_items = metadata["analysis_trace"]
+            if isinstance(trace_items, list):
+                metadata_parts.append("analysis=" + " | ".join(str(item) for item in trace_items[:3]))
+        if metadata.get("answer_preview"):
+            metadata_parts.append(f"answer_preview={str(metadata.get('answer_preview'))[:120]}")
+        if metadata.get("latency_ms") is not None:
+            metadata_parts.append(f"latency_ms={metadata.get('latency_ms')}")
+        if metadata.get("error"):
+            metadata_parts.append(f"error={metadata.get('error')}")
+    suffix = f" ({'; '.join(metadata_parts)})" if metadata_parts else ""
+    return f"[{sequence:03d}] {event_type}: {status_text}{suffix}"
+
+
+def _run_request_with_live_status(
+    backend_url: str,
+    *,
+    path: str,
+    payload: dict[str, Any],
+    run_id: str | None = None,
+) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    resolved_run_id = (run_id or str(payload.get("run_id", "")).strip() or str(uuid.uuid4())).strip()
     payload_with_run_id = dict(payload)
-    payload_with_run_id["run_id"] = run_id
+    payload_with_run_id["run_id"] = resolved_run_id
     timeout_sec = float(st.session_state.get("request_timeout_sec", REQUEST_TIMEOUT_SEC))
 
     result: dict[str, Any] = {"status_code": None, "body": None}
@@ -375,7 +414,7 @@ def _run_agents_with_live_status(backend_url: str, payload: dict[str, Any]) -> t
         status_code, body = _request_json_direct(
             "POST",
             backend_url,
-            "/agents/run",
+            path,
             payload=payload_with_run_id,
             timeout_sec=timeout_sec,
         )
@@ -386,24 +425,37 @@ def _run_agents_with_live_status(backend_url: str, payload: dict[str, Any]) -> t
     worker.start()
 
     live_box = st.empty()
+    live_log = st.empty()
     state = "running"
     status_text = "Starting run..."
-    live_box.markdown(_status_box_markdown(run_id, state, status_text))
+    live_box.markdown(_status_box_markdown(resolved_run_id, state, status_text))
+    transcript_lines: list[str] = []
+    after_sequence = 0
 
     while worker.is_alive():
-        status_code, body = _fetch_run_status(backend_url, run_id)
+        status_code, body = _fetch_run_status(backend_url, resolved_run_id)
         if 200 <= status_code < 300 and isinstance(body, dict):
             state = str(body.get("state", "running"))
             status_text = str(body.get("status_text", "Running..."))
             st.session_state["last_agents_run_status"] = body
-        live_box.markdown(_status_box_markdown(run_id, state, status_text))
+        events_code, events_payload, _ = _fetch_run_events(backend_url, resolved_run_id, after_sequence=after_sequence)
+        if 200 <= events_code < 300 and events_payload:
+            for event in events_payload:
+                seq = int(event.get("sequence_number", 0) or 0)
+                if seq > after_sequence:
+                    after_sequence = seq
+                    transcript_lines.append(_format_runtime_event_line(event))
+            st.session_state["last_agents_run_events"] = events_payload
+        live_box.markdown(_status_box_markdown(resolved_run_id, state, status_text))
+        if transcript_lines:
+            live_log.code("\n".join(transcript_lines[-120:]), language="text")
         time.sleep(0.5)
 
     worker.join(timeout=0.1)
     status_code = int(result.get("status_code", 0) or 0)
     body = result.get("body", {"error": "run_worker_failed"})
 
-    final_status_code, final_status = _fetch_run_status(backend_url, run_id)
+    final_status_code, final_status = _fetch_run_status(backend_url, resolved_run_id)
     if 200 <= final_status_code < 300 and isinstance(final_status, dict):
         st.session_state["last_agents_run_status"] = final_status
         state = str(final_status.get("state", "completed"))
@@ -418,17 +470,36 @@ def _run_agents_with_live_status(backend_url: str, payload: dict[str, Any]) -> t
         state = "failed"
         status_text = f"Run failed (HTTP {status_code})."
 
-    live_box.markdown(_status_box_markdown(run_id, state, status_text))
+    events_fetch_code, events_payload, _ = _fetch_run_events(backend_url, resolved_run_id, after_sequence=after_sequence)
+    if 200 <= events_fetch_code < 300 and events_payload:
+        for event in events_payload:
+            seq = int(event.get("sequence_number", 0) or 0)
+            if seq > after_sequence:
+                after_sequence = seq
+                transcript_lines.append(_format_runtime_event_line(event))
+
+    live_box.markdown(_status_box_markdown(resolved_run_id, state, status_text))
+    if transcript_lines:
+        live_log.code("\n".join(transcript_lines[-160:]), language="text")
 
     if 200 <= status_code < 300 and isinstance(body, dict):
-        st.session_state["last_agents_run_id"] = run_id
-        st.session_state["agents_runtime_run_id"] = run_id
+        st.session_state["last_agents_run_id"] = resolved_run_id
+        st.session_state["agents_runtime_run_id"] = resolved_run_id
         st.session_state["last_agents_run_payload"] = body
-        events_fetch_code, events_payload, _ = _fetch_run_events(backend_url, run_id, after_sequence=0)
+        events_fetch_code, events_payload, _ = _fetch_run_events(backend_url, resolved_run_id, after_sequence=0)
         if 200 <= events_fetch_code < 300:
             st.session_state["last_agents_run_events"] = events_payload
 
     return status_code, body
+
+
+def _run_agents_with_live_status(backend_url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    return _run_request_with_live_status(
+        backend_url,
+        path="/agents/run",
+        payload=payload,
+        run_id=str(payload.get("run_id", "")).strip() or None,
+    )
 
 
 def _render_agents_pipeline_helper(latest_payload: dict[str, Any] | list[Any] | str) -> None:
@@ -483,6 +554,74 @@ def _render_agents_runtime_live_helper(backend_url: str) -> None:
         st.info("No live status loaded yet.")
 
 
+def _ensure_chat_state() -> None:
+    st.session_state.setdefault("chat_selected_id", "")
+    st.session_state.setdefault("chat_upload_nonce", 0)
+    st.session_state.setdefault("chat_sources_text", "")
+    st.session_state.setdefault("chat_include_archived", False)
+
+
+def _fetch_chat_sessions(base_url: str, include_archived: bool = False) -> list[dict[str, Any]]:
+    status_code, body = _request_json("GET", base_url, f"/chat/sessions?include_archived={'true' if include_archived else 'false'}")
+    if not (200 <= status_code < 300 and isinstance(body, dict)):
+        return []
+    sessions = body.get("sessions", [])
+    if not isinstance(sessions, list):
+        return []
+    return [item for item in sessions if isinstance(item, dict)]
+
+
+def _create_chat_session(base_url: str, title: str | None = None) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    payload: dict[str, Any] = {}
+    if title and title.strip():
+        payload["title"] = title.strip()
+    return _request_json("POST", base_url, "/chat/sessions", payload=payload)
+
+
+def _update_chat_session(base_url: str, chat_id: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    return _request_json("PATCH", base_url, f"/chat/sessions/{chat_id}", payload=payload)
+
+
+def _fetch_chat_messages(base_url: str, chat_id: str, limit: int = 500) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    status_code, body = _request_json("GET", base_url, f"/chat/sessions/{chat_id}/messages?limit={max(limit, 1)}")
+    if not (200 <= status_code < 300 and isinstance(body, dict)):
+        return [], []
+    messages = body.get("messages", [])
+    files = body.get("files", [])
+    safe_messages = [item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else []
+    safe_files = [item for item in files if isinstance(item, dict)] if isinstance(files, list) else []
+    return safe_messages, safe_files
+
+
+def _render_chat_history(messages: list[dict[str, Any]]) -> None:
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "assistant"))
+        content = str(message.get("content", ""))
+        with st.chat_message(role if role in {"user", "assistant"} else "assistant"):
+            if content:
+                st.markdown(content)
+            metadata = message.get("metadata", {})
+            if isinstance(metadata, dict):
+                mode = str(metadata.get("mode", "")).strip()
+                run_id = str(metadata.get("run_id", "")).strip()
+                if mode:
+                    st.caption(f"Mode: {mode}")
+                if run_id:
+                    st.caption(f"Run ID: {run_id}")
+
+
+def _build_steering_payload(profile: str, min_citations: int, abstain: bool) -> dict[str, Any]:
+    return {
+        "profile": profile,
+        "grounding": {
+            "min_citations": int(min_citations),
+            "abstain_on_insufficient_citations": bool(abstain),
+        },
+    }
+
+
 def main() -> None:
     st.set_page_config(page_title="MMAA Frontend", page_icon=":material/hub:", layout="wide")
     st.title("Multimodal Multi-Agent Assistant")
@@ -504,6 +643,7 @@ def main() -> None:
 
     (
         implementation_tab,
+        chat_tab,
         architecture_tab,
         health_tab,
         ingest_tab,
@@ -516,6 +656,7 @@ def main() -> None:
     ) = st.tabs(
         [
             "Implementation",
+            "Chat",
             "Architecture",
             "Health",
             "Ingest",
@@ -695,6 +836,197 @@ def main() -> None:
         st.subheader("Flow Summary")
         for item in high_level_flow_points():
             st.markdown(f"- {item}")
+
+    with chat_tab:
+        _ensure_chat_state()
+        st.subheader("Conversational Chat (Persistent)")
+        st.caption(
+            "Durable multi-chat workspace with server-side session history, chat-scoped source ingestion, "
+            "mode/tool controls, and live runtime transcript for agent runs."
+        )
+
+        controls_left, controls_right = st.columns([1.2, 1.8])
+        with controls_left:
+            st.markdown("### Sessions")
+            st.session_state["chat_include_archived"] = st.checkbox(
+                "Show archived",
+                value=bool(st.session_state.get("chat_include_archived", False)),
+                key="chat_include_archived",
+            )
+            sessions = _fetch_chat_sessions(backend_url, include_archived=bool(st.session_state["chat_include_archived"]))
+            if not sessions:
+                st.info("No chat sessions found yet.")
+            session_ids = [str(item.get("chat_id", "")) for item in sessions]
+            label_by_id = {
+                str(item.get("chat_id", "")): (
+                    f"{str(item.get('title', 'Untitled'))} [{str(item.get('updated_at', ''))[:19].replace('T', ' ')}]"
+                )
+                for item in sessions
+            }
+            selected_id = str(st.session_state.get("chat_selected_id", "")).strip()
+            if session_ids and selected_id not in session_ids:
+                selected_id = session_ids[0]
+                st.session_state["chat_selected_id"] = selected_id
+            if session_ids:
+                selected_index = session_ids.index(selected_id) if selected_id in session_ids else 0
+                picked_id = st.selectbox(
+                    "Choose chat",
+                    options=session_ids,
+                    index=selected_index,
+                    key="chat_session_picker",
+                    format_func=lambda cid: label_by_id.get(cid, cid),
+                )
+                st.session_state["chat_selected_id"] = picked_id
+                selected_id = picked_id
+
+            new_title = st.text_input("New chat title (optional)", value="", key="chat_new_title")
+            col_new, col_archive = st.columns(2)
+            with col_new:
+                if st.button("Create chat", key="chat_create_button"):
+                    create_code, create_body = _create_chat_session(backend_url, new_title)
+                    if 200 <= create_code < 300 and isinstance(create_body, dict):
+                        new_chat_id = str(create_body.get("chat_id", "")).strip()
+                        if new_chat_id:
+                            st.session_state["chat_selected_id"] = new_chat_id
+                            st.rerun()
+                    else:
+                        _render_response(create_code, create_body)
+            with col_archive:
+                if st.button("Archive selected", key="chat_archive_button"):
+                    selected_id = str(st.session_state.get("chat_selected_id", "")).strip()
+                    if not selected_id:
+                        st.error("Select a session first.")
+                    else:
+                        patch_code, patch_body = _update_chat_session(backend_url, selected_id, {"archived": True})
+                        if 200 <= patch_code < 300:
+                            st.session_state["chat_selected_id"] = ""
+                            st.rerun()
+                        else:
+                            _render_response(patch_code, patch_body)
+
+            active_chat_id = str(st.session_state.get("chat_selected_id", "")).strip()
+            if not active_chat_id and not sessions:
+                st.caption("Create a chat session to start.")
+
+        with controls_right:
+            active_chat_id = str(st.session_state.get("chat_selected_id", "")).strip()
+            if not active_chat_id:
+                st.info("Select or create a chat session.")
+            chat_mode = st.radio(
+                "Answer mode",
+                options=["Auto", "RAG Query", "Agentic Run"],
+                horizontal=True,
+                key="chat_mode",
+            )
+            chat_top_k = st.slider("RAG top_k", min_value=1, max_value=20, value=5, key="chat_top_k")
+            chat_source_type = st.selectbox(
+                "Source type for per-turn ingest",
+                options=["mixed", "text", "url", "pdf", "docx", "pptx", "xlsx", "markdown", "html", "image", "video"],
+                key="chat_source_type",
+            )
+            chat_include_global_scope = st.checkbox(
+                "Include global indexed sources (cross-chat)",
+                value=False,
+                key="chat_include_global_scope",
+            )
+
+            chat_profile = st.selectbox(
+                "Steering profile",
+                options=["balanced", "concise", "strict-grounded", "creative"],
+                key="chat_steering_profile",
+            )
+            chat_min_citations = st.slider("Minimum citations", min_value=0, max_value=5, value=1, key="chat_min_citations")
+            chat_abstain = st.checkbox(
+                "Abstain if citations are insufficient",
+                value=chat_profile == "strict-grounded",
+                key="chat_abstain_on_shortfall",
+            )
+
+            chat_tools = st.multiselect(
+                "Agent tools (optional)",
+                options=available_tool_names,
+                default=[],
+                format_func=lambda name: (
+                    f"{name} - {available_tool_descriptions.get(name, '')}"
+                    if available_tool_descriptions.get(name)
+                    else name
+                ),
+                key="chat_tools",
+            )
+
+            chat_sources_text = st.text_area(
+                "Additional sources for this turn (one URI/path per line, optional)",
+                value=st.session_state.get("chat_sources_text", ""),
+                key="chat_sources_text",
+                height=90,
+            )
+            upload_nonce = int(st.session_state.get("chat_upload_nonce", 0))
+            chat_uploaded_files = st.file_uploader(
+                "Upload files for this turn",
+                accept_multiple_files=True,
+                key=f"chat_uploaded_files_{upload_nonce}",
+            )
+            chat_clipboard_sources = _persist_clipboard_images("chat")
+            st.caption(
+                "Per-turn uploads/clipboard images are attached to the selected chat and ingested before answering. "
+                "Any file extension can be uploaded; backend parsers determine what is indexable."
+            )
+
+            if active_chat_id:
+                messages, files = _fetch_chat_messages(backend_url, active_chat_id)
+                if files:
+                    st.caption(f"Stored files in this chat: {len(files)}")
+                _render_chat_history(messages)
+            else:
+                messages = []
+
+            chat_user_message = st.chat_input("Send a message")
+            if chat_user_message:
+                active_chat_id = str(st.session_state.get("chat_selected_id", "")).strip()
+                if not active_chat_id:
+                    st.error("Create or select a chat session first.")
+                else:
+                    manual_sources = [line.strip() for line in chat_sources_text.splitlines() if line.strip()]
+                    uploaded_sources = _persist_uploaded_files(chat_uploaded_files)
+                    combined_sources = manual_sources + uploaded_sources + chat_clipboard_sources
+                    steering_payload = _build_steering_payload(chat_profile, chat_min_citations, chat_abstain)
+                    resolved_mode = chat_mode
+                    if chat_mode == "Auto":
+                        resolved_mode = _auto_select_answer_mode(chat_user_message, chat_tools)
+                    mode_value = "agentic" if resolved_mode == "Agentic Run" else "rag"
+                    request_payload: dict[str, Any] = {
+                        "message": chat_user_message,
+                        "mode": mode_value,
+                        "top_k": chat_top_k,
+                        "steering": steering_payload,
+                        "source_type": chat_source_type,
+                        "sources": combined_sources,
+                        "include_global_scope": bool(chat_include_global_scope),
+                    }
+                    if chat_tools:
+                        request_payload["tools"] = chat_tools
+
+                    chat_path = f"/chat/sessions/{active_chat_id}/messages"
+                    if mode_value == "agentic":
+                        run_id = str(uuid.uuid4())
+                        request_payload["run_id"] = run_id
+                        status_code, body = _run_request_with_live_status(
+                            backend_url,
+                            path=chat_path,
+                            payload=request_payload,
+                            run_id=run_id,
+                        )
+                    else:
+                        status_code, body = _request_json("POST", backend_url, chat_path, payload=request_payload)
+
+                    if not (200 <= status_code < 300):
+                        _render_response(status_code, body)
+
+                    st.session_state["chat_sources_text"] = ""
+                    st.session_state["chat_clipboard_sources"] = []
+                    st.session_state["chat_clipboard_digest"] = ""
+                    st.session_state["chat_upload_nonce"] = upload_nonce + 1
+                    st.rerun()
 
     with health_tab:
         st.subheader("GET /health")

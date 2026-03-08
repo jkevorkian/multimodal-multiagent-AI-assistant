@@ -36,12 +36,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: defines FR/NFR testable requirements and boundaries.
 
 `docs/02-implementation-roadmap.md`
-- Milestone metadata: introduced `M0`; updated `M5.2`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
 - Theoretical role: milestone planning artifact for incremental delivery.
 - Technical/practical role: defines objectives, outputs, risks, and DoD per milestone.
 
 `docs/03-didactic-traceability.md`
-- Milestone metadata: introduced `M0`; updated `M5.2`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
 - Theoretical role: learning/decision narrative over implementation lifecycle.
 - Technical/practical role: stores didactic cards, decision log, and troubleshooting heuristics.
 
@@ -151,9 +151,9 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: contains router assembly modules.
 
 `app/api/router.py`
-- Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
 - Theoretical role: deterministic API route composition boundary.
-- Technical/practical role: includes and mounts all route modules.
+- Technical/practical role: includes and mounts all route modules, including persistent chat/session endpoints.
 
 `app/api/routes/__init__.py`
 - Milestone metadata: introduced `M0`; updated `M0`; status `implemented`.
@@ -402,12 +402,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `frontend/architecture.py`
 - Milestone metadata: introduced `M2.2`; updated `M5.2`; status `implemented`.
 - Theoretical role: architecture communication artifact.
-- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets, including LangGraph, tool discovery endpoint, M4.1 video frame-evidence pipeline, and planned runtime controls (context compaction + steering).
+- Technical/practical role: provides Graphviz DOT graph and high-level flow bullets, including LangGraph, tool discovery endpoint, M4.1 video frame-evidence pipeline, runtime status loops, and steering/compaction controls.
 
 `frontend/streamlit_app.py`
-- Milestone metadata: introduced `M2.2`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M2.2`; updated `M2.4`; status `implemented`.
 - Theoretical role: human-facing interaction boundary for backend workflows.
-- Technical/practical role: renders architecture diagram, adds user-friendly implementation flow tab, preserves route-level playground forms, discovers tools through `/agents/tools`, and supports clipboard image paste ingestion.
+- Technical/practical role: renders architecture diagram, user-friendly implementation flow tab, route playground forms, tool discovery via `/agents/tools`, clipboard image paste ingestion, persistent multi-chat workflows, and live transcript-style runtime status.
 
 `tests/test_frontend_architecture.py`
 - Milestone metadata: introduced `M2.2`; updated `M5.2`; status `implemented`.
@@ -455,6 +455,78 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Milestone metadata: introduced `M2.2`; updated `M2.3`; status `implemented`.
 - Theoretical role: regression guard for M2.3 architecture communication helpers.
 - Technical/practical role: validates loop graph guardrail nodes plus live-status and loop-guard schema helpers.
+
+## 6.2 M2.4 - Persistent Chat + Scoped Context + Runtime Transcript
+
+`docs/12-chat-persistence-and-runtime-reasoning-plan.md`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: research-backed architecture blueprint for durable chat and reasoning transcript UX.
+- Technical/practical role: captures industry patterns, gap analysis, target data model, API surface, and phased rollout plan.
+
+`app/contracts/chat.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: durable conversation contract boundary.
+- Technical/practical role: defines chat session/message/file/run schemas for API validation.
+
+`app/storage/chat_store.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: persistence boundary for chat lifecycle entities.
+- Technical/practical role: stores/retrieves chats, messages, files, and run links (SQLite-first local implementation).
+
+`app/api/routes/chat.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: chat-session API boundary.
+- Technical/practical role: exposes CRUD-like chat/session/message/file endpoints and run transcript retrieval.
+
+`app/interfaces/vector_store.py`
+- Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
+- Theoretical role change: retrieval-store interface expands from global search to scope-aware retrieval.
+- Technical/practical change: adds optional metadata-filter parameters for chat-scoped queries.
+
+`app/rag/ingestion.py`
+- Milestone metadata: introduced `M1`; updated `M2.4`; status `implemented`.
+- Theoretical role change: ingestion metadata becomes conversation-aware.
+- Technical/practical change: tags chunks with `chat_id`/`message_id`/`scope` for scoped retrieval.
+
+`app/rag/retriever.py`
+- Milestone metadata: introduced `M1`; updated `M2.4`; status `implemented`.
+- Theoretical role change: retrieval becomes scope-sensitive.
+- Technical/practical change: passes metadata filters to dense/lexical retrieval paths in chat mode.
+
+`app/storage/pgvector_store.py`
+- Milestone metadata: introduced `M1`; updated `M2.4`; status `implemented`.
+- Theoretical role change: vector search includes metadata filtering semantics.
+- Technical/practical change: apply JSONB filter predicates for chat-scoped queries.
+
+`app/storage/qdrant_store.py`
+- Milestone metadata: introduced `M1`; updated `M2.4`; status `implemented`.
+- Theoretical role change: external vector-store path supports scoped retrieval.
+- Technical/practical change: translate metadata filters into Qdrant filter clauses.
+
+`app/core/event_bus.py`
+- Milestone metadata: introduced `M2.3`; updated `M2.4`; status `implemented`.
+- Theoretical role change: from status-event stream to transcript-capable runtime telemetry.
+- Technical/practical change: normalize event families/details for scrollable stage/evidence/tool/reasoning timeline rendering.
+
+`frontend/streamlit_app.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.4`; status `implemented`.
+- Theoretical role change: transitions from session-local chat to durable multi-chat workspace.
+- Technical/practical change: adds chat list/sidebar, persisted message history, per-chat file panel, and transcript timeline viewer.
+
+`tests/test_m24_chat_sessions.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: persistence regression guard for chat lifecycle operations.
+- Technical/practical role: validates create/list/reopen/continue flows and data durability across app restarts.
+
+`tests/test_m24_chat_scoped_retrieval.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: isolation regression guard for chat context boundaries.
+- Technical/practical role: validates retrieval cannot leak evidence across chat scopes by default.
+
+`tests/test_m24_runtime_transcript.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: runtime explainability regression guard.
+- Technical/practical role: validates ordered transcript payloads contain stage/evidence/tool detail fields and scroll-safe pagination.
 
 ## 7. M3 - Image Multimodal Path
 

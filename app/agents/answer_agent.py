@@ -35,11 +35,16 @@ class AnswerAgent:
         trace_id = state.trace.get("trace_id", "unknown")
         if not run_id:
             return
+        context_preview = [str(item.get("snippet", ""))[:180] for item in state.retrieved_context[:3] if item.get("snippet")]
         await self._event_bus.emit(
             run_id=run_id,
             trace_id=trace_id,
             event_type="model.call.in_progress",
             status_text="Synthesizing final answer...",
             agent="answer_agent",
-            metadata={"model": self._llm.__class__.__name__},
+            metadata={
+                "model": self._llm.__class__.__name__,
+                "context_preview": context_preview,
+                "analysis_notes": state.analysis_notes[-3:],
+            },
         )

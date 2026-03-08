@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import tempfile
+from pathlib import Path
+from uuid import uuid4
 
 from app.agents import (
     AgentOrchestrator,
@@ -19,7 +22,7 @@ from app.interfaces import EmbeddingClient, LLMClient, Reranker, Retriever, Tool
 from app.llm import build_llm_client
 from app.multimodal import build_multimodal_clients
 from app.rag import DocumentIngestionService, TextRAGRetriever, build_embedding_client, build_reranker
-from app.storage import FallbackVectorStore, PgVectorStore, QdrantVectorStore
+from app.storage import FallbackVectorStore, PgVectorStore, QdrantVectorStore, SQLiteChatStore
 from app.tools import ToolRegistry
 
 
@@ -45,6 +48,7 @@ class ServiceContainer:
     tool_registry: ToolRegistry
     orchestrator: AgentOrchestrator
     event_bus: InMemoryEventBus
+    chat_store: SQLiteChatStore
     embedding_provider: str
     llm_provider: str
     reranker_provider: str
@@ -186,6 +190,10 @@ def _build_service_container_internal(
         context_manager=context_manager,
     )
 
+    chat_store_path = settings.chat_store_path
+    if disable_external_api:
+        chat_store_path = str(Path(tempfile.gettempdir()) / f"mmaa_chat_store_{uuid4().hex}.db")
+
     return ServiceContainer(
         llm=llm,
         embeddings=embeddings,
@@ -199,6 +207,7 @@ def _build_service_container_internal(
         tool_registry=tool_registry,
         orchestrator=orchestrator,
         event_bus=event_bus,
+        chat_store=SQLiteChatStore(chat_store_path),
         embedding_provider=embedding_selection.provider_name,
         llm_provider=llm_selection.provider_name,
         reranker_provider=reranker_selection.provider_name,

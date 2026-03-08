@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     context_compaction_enabled: bool = True
     context_compaction_token_threshold: int = 1500
     context_compaction_target_token_threshold: int = 750
+    chat_store_path: str = "data/chat_store.db"
 
     model_config = SettingsConfigDict(
         env_prefix="MMAA_",

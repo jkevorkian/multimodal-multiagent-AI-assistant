@@ -16,6 +16,7 @@ This document explains learning intent and technical reasoning during implementa
 | M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops, durable checkpoints | LangGraph StateGraph, MCP tool adapters, tool registry patterns |
 | M2.2 | Frontend architecture visibility | API contract usability, architecture communication, backend/frontend coupling boundaries | Streamlit, Graphviz DOT, HTTP API clients |
 | M2.3 | Live runtime telemetry + revision loops | Event streaming, progress observability, evaluator/reviser loops, termination guardrails | SSE, runtime event bus, loop-controller patterns |
+| M2.4 | Persistent chat + scoped context | durable conversation state, retrieval isolation, transcripted reasoning UX | chat/session stores, metadata-filtered retrieval, event timeline UX |
 | M3 | Image path | Input preprocessing, multimodal inference, evidence fusion | Vision model adapters |
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
 | M5.1 | Context compaction | Token-budget control, state summarization, memory safety invariants | Session/context manager patterns, summary checkpoints |
@@ -99,6 +100,13 @@ Streamlit allows a low-friction teaching UI without introducing a heavy frontend
 - A frontend helper test validates diagram content and flow explanation presence.
 - Agent tool selection moved from free-text input to discoverable multiselect, populated from `/agents/tools`.
 - Ingestion UX now supports clipboard image paste (`Ctrl+V`) in addition to file upload.
+- Delivered M2.2 extension (2026-03-08): multi-turn Chat tab with:
+  - repeated message/answer exchanges
+  - per-turn ingestion from uploads/URIs/clipboard images
+  - mode controls (`RAG` vs `agentic`) and optional multi-tool selection
+  - live status box updates during agent runs
+  - compatibility with compaction/steering milestones already wired in backend routes.
+- Follow-up delivered (2026-03-08, M2.4): chat is now backend-persisted with session history, per-chat files, and chat-scoped retrieval isolation.
 
 ## M2.3 - Live Runtime Telemetry + Revision Loops
 ### How it works
@@ -117,6 +125,26 @@ SSE and append-only event sequencing are lightweight for local deployment, and l
 - OpenAI Responses API exposes granular streaming events (`response.output_text.delta`, tool-call deltas, completion/failure) suitable for user-facing progress mapping.
 - AutoGen exposes explicit termination conditions (e.g., max message/turn limits) that map directly to loop guardrail policy.
 - AWS Bedrock and Vertex agent stacks expose trace/monitoring primitives so operators can inspect multi-step agent execution.
+
+## M2.4 - Persistent Chat + Scoped Context + Runtime Transcript
+### How it works
+Backend chat sessions become first-class entities (`chat_id`) with durable messages/files. Ingestion metadata and retrieval are filtered by chat scope so each conversation carries its own context. Runtime events are shown as a scrollable transcript with stage, evidence, and tool details.
+
+### Why it works
+Modern chat systems persist server-side conversation state and bind uploaded context to that state. This enables revisit/resume behavior and avoids context leakage across unrelated chats.
+
+### Why this technology fits
+The current architecture already has run IDs, event streaming, compaction, and steering hooks. Adding chat persistence and metadata-filtered retrieval extends existing contracts instead of replacing them.
+
+### External pattern alignment (2026-03-08)
+- OpenAI conversation guidance documents stateful conversation IDs and compaction for long context windows.
+- LangGraph persistence/streaming guidance aligns with thread-based checkpoints and event-driven runtime UX.
+- Anthropic/vLLM/SGLang show provider-specific reasoning channels; UI must be provider-aware.
+- Open WebUI reflects baseline UX expectations: durable chat history and revisit flows.
+
+Current status (2026-03-08): implemented with durable chat routes/store, retrieval metadata filters, and transcript-enriched event rendering.
+
+Reference blueprint: `docs/12-chat-persistence-and-runtime-reasoning-plan.md`.
 
 ## M3 - Image Multimodal
 ### How it works

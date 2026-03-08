@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -76,6 +77,8 @@ class AgentOrchestrator:
                 "steps_completed": len(state.steps),
                 "retrieved_chunks": len(state.retrieved_context),
                 "tool_calls_total": len(state.tool_calls),
+                "retrieval_preview": self._build_retrieval_preview(state.retrieved_context),
+                "retrieval_filter": dict(state.retrieval_filter),
             },
         )
         await self._save_checkpoint(state)
@@ -105,6 +108,7 @@ class AgentOrchestrator:
                 "steps_completed": len(state.steps),
                 "analysis_notes": len(state.analysis_notes),
                 "confidence": round(state.confidence, 4),
+                "analysis_trace": state.analysis_notes[-5:],
             },
         )
         await self._save_checkpoint(state)
@@ -130,7 +134,12 @@ class AgentOrchestrator:
             event_type="agent.step.completed",
             agent_name="answer_agent",
             status_text="Answer synthesis step completed.",
-            metadata={"steps_completed": len(state.steps), "confidence": round(state.confidence, 4)},
+            metadata={
+                "steps_completed": len(state.steps),
+                "confidence": round(state.confidence, 4),
+                "answer_preview": state.final_answer[:320],
+                "errors": state.errors[-3:],
+            },
         )
         await self._save_checkpoint(state)
         return {"agent_state": state}
@@ -148,6 +157,7 @@ class AgentOrchestrator:
         tool_budget: int = 2,
         max_steps: int | None = None,
         resume_from_checkpoint: bool = False,
+        retrieval_filter: dict[str, Any] | None = None,
     ) -> AgentState:
         started_at = time.perf_counter()
         trace_id = trace.get("trace_id", "unknown")
@@ -174,6 +184,7 @@ class AgentOrchestrator:
                 "tool_budget": tool_budget,
                 "max_revision_iterations": max_revision_iterations,
                 "resume_from_checkpoint": resume_from_checkpoint,
+                "retrieval_filter": dict(retrieval_filter or {}),
             },
         )
         state: AgentState
@@ -194,6 +205,7 @@ class AgentOrchestrator:
                     query=query,
                     trace=runtime_trace,
                     allowed_tools=allowed_tools,
+                    retrieval_filter=dict(retrieval_filter or {}),
                     tool_budget=tool_budget,
                     max_steps=resolved_max_steps,
                 )
@@ -202,6 +214,7 @@ class AgentOrchestrator:
                 query=query,
                 trace=runtime_trace,
                 allowed_tools=allowed_tools,
+                retrieval_filter=dict(retrieval_filter or {}),
                 tool_budget=tool_budget,
                 max_steps=resolved_max_steps,
             )
@@ -209,6 +222,7 @@ class AgentOrchestrator:
         state.max_steps = resolved_max_steps
         state.trace = runtime_trace
         state.allowed_tools = allowed_tools
+        state.retrieval_filter = dict(retrieval_filter or state.retrieval_filter)
         revision_iteration = 0
         guardrail = None
         while True:
@@ -404,3 +418,17 @@ class AgentOrchestrator:
             tool=tool,
             metadata=metadata or {},
         )
+
+    @staticmethod
+    def _build_retrieval_preview(retrieved_context: list[dict[str, Any]], limit: int = 4) -> list[dict[str, Any]]:
+        preview: list[dict[str, Any]] = []
+        for item in retrieved_context[:limit]:
+            preview.append(
+                {
+                    "source": str(item.get("source", "unknown")),
+                    "chunk_id": int(item.get("chunk_id", -1)),
+                    "score": round(float(item.get("score", 0.0)), 4),
+                    "snippet": str(item.get("snippet", ""))[:220],
+                }
+            )
+        return preview

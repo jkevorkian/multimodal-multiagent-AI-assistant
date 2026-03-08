@@ -36,7 +36,7 @@ class QdrantVectorStore:
 
         self._enabled = self._try_initialize()
 
-    async def upsert(self, ids: list[str], vectors: list[list[float]], metadata: list[dict]) -> None:
+    async def upsert(self, ids: list[str], vectors: list[list[float]], metadata: list[dict[str, Any]]) -> None:
         if not (len(ids) == len(vectors) == len(metadata)):
             raise ValueError("ids, vectors, and metadata length must match")
         if not self._enabled:
@@ -52,33 +52,62 @@ class QdrantVectorStore:
 
         self._client.upsert(collection_name=self._collection_name, points=points, wait=True)
 
-    async def search(self, vector: list[float], top_k: int) -> list[dict]:
+    async def search(
+        self,
+        vector: list[float],
+        top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if top_k <= 0:
             return []
         if not self._enabled:
             raise RuntimeError("Qdrant store is not enabled")
 
         assert self._client is not None
+        assert self._models is not None
         results: list[Any]
+        qdrant_filter = self._build_qdrant_filter(metadata_filter)
 
         if hasattr(self._client, "query_points"):
-            query_response = self._client.query_points(
-                collection_name=self._collection_name,
-                query=vector,
-                limit=top_k,
-                with_payload=True,
-            )
+            try:
+                query_response = self._client.query_points(
+                    collection_name=self._collection_name,
+                    query=vector,
+                    limit=top_k,
+                    with_payload=True,
+                    query_filter=qdrant_filter,
+                )
+            except TypeError:
+                query_response = self._client.query_points(
+                    collection_name=self._collection_name,
+                    query=vector,
+                    limit=top_k,
+                    with_payload=True,
+                    filter=qdrant_filter,
+                )
             points = query_response.points if hasattr(query_response, "points") else query_response
             results = list(points)
         else:
-            results = list(
-                self._client.search(
-                    collection_name=self._collection_name,
-                    query_vector=vector,
-                    limit=top_k,
-                    with_payload=True,
+            try:
+                results = list(
+                    self._client.search(
+                        collection_name=self._collection_name,
+                        query_vector=vector,
+                        limit=top_k,
+                        with_payload=True,
+                        query_filter=qdrant_filter,
+                    )
                 )
-            )
+            except TypeError:
+                results = list(
+                    self._client.search(
+                        collection_name=self._collection_name,
+                        query_vector=vector,
+                        limit=top_k,
+                        with_payload=True,
+                        filter=qdrant_filter,
+                    )
+                )
 
         normalized: list[dict] = []
         for row in results:
@@ -89,7 +118,12 @@ class QdrantVectorStore:
             normalized.append({"id": identifier, "metadata": payload, "score": float(getattr(row, "score", 0.0))})
         return normalized
 
-    async def keyword_search(self, query: str, top_k: int) -> list[dict]:
+    async def keyword_search(
+        self,
+        query: str,
+        top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if top_k <= 0:
             return []
 
@@ -100,6 +134,8 @@ class QdrantVectorStore:
         tokenized_records: list[tuple[_MetadataRecord, list[str]]] = []
         df: dict[str, int] = {term: 0 for term in terms}
         for record in self._metadata_cache.values():
+            if not self._metadata_matches(record.metadata, metadata_filter):
+                continue
             source = str(record.metadata.get("source", ""))
             snippet = str(record.metadata.get("snippet", ""))
             tokens = re.findall(r"[a-z0-9]+", f"{source} {snippet}".lower())
@@ -137,7 +173,11 @@ class QdrantVectorStore:
         scored.sort(key=lambda row: row["score"], reverse=True)
         return scored[:top_k]
 
-    async def list_indexed_sources(self, limit: int = 200) -> list[dict]:
+    async def list_indexed_sources(
+        self,
+        limit: int = 200,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if limit <= 0:
             return []
         if not self._enabled:
@@ -146,7 +186,11 @@ class QdrantVectorStore:
         if not self._metadata_cache:
             self._warm_metadata_cache(max_points=max(2000, limit * 20))
 
-        metadata_rows = [dict(record.metadata) for record in self._metadata_cache.values()]
+        metadata_rows = [
+            dict(record.metadata)
+            for record in self._metadata_cache.values()
+            if self._metadata_matches(record.metadata, metadata_filter)
+        ]
         return summarize_indexed_sources(metadata_rows, limit=limit)
 
     def _try_initialize(self) -> bool:
@@ -227,3 +271,21 @@ class QdrantVectorStore:
             if not next_offset:
                 break
             offset = next_offset
+
+    def _build_qdrant_filter(self, metadata_filter: dict[str, Any] | None) -> Any | None:
+        if not metadata_filter:
+            return None
+        assert self._models is not None
+        conditions = []
+        for key, value in metadata_filter.items():
+            conditions.append(self._models.FieldCondition(key=key, match=self._models.MatchValue(value=value)))
+        return self._models.Filter(must=conditions)
+
+    @staticmethod
+    def _metadata_matches(metadata: dict[str, Any], metadata_filter: dict[str, Any] | None) -> bool:
+        if not metadata_filter:
+            return True
+        for key, expected in metadata_filter.items():
+            if metadata.get(key) != expected:
+                return False
+        return True

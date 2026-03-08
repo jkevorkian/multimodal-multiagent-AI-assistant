@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ class PgVectorStore:
         self._psycopg = None
         self._try_enable_postgres()
 
-    async def upsert(self, ids: list[str], vectors: list[list[float]], metadata: list[dict]) -> None:
+    async def upsert(self, ids: list[str], vectors: list[list[float]], metadata: list[dict[str, Any]]) -> None:
         if not (len(ids) == len(vectors) == len(metadata)):
             raise ValueError("ids, vectors, and metadata length must match")
 
@@ -46,13 +47,18 @@ class PgVectorStore:
         for item_id, vector, item_metadata in zip(ids, vectors, metadata, strict=True):
             self._records[item_id] = _MemoryRecord(id=item_id, vector=vector, metadata=item_metadata)
 
-    async def search(self, vector: list[float], top_k: int) -> list[dict]:
+    async def search(
+        self,
+        vector: list[float],
+        top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if top_k <= 0:
             return []
 
         if self._use_postgres:
             try:
-                return self._search_postgres(vector, top_k)
+                return self._search_postgres(vector, top_k, metadata_filter=metadata_filter)
             except Exception:
                 self._use_postgres = False
 
@@ -63,11 +69,17 @@ class PgVectorStore:
                 "score": cosine_similarity(vector, record.vector),
             }
             for record in self._records.values()
+            if self._metadata_matches(record.metadata, metadata_filter)
         ]
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
-    async def keyword_search(self, query: str, top_k: int) -> list[dict]:
+    async def keyword_search(
+        self,
+        query: str,
+        top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if top_k <= 0:
             return []
 
@@ -77,13 +89,15 @@ class PgVectorStore:
 
         if self._use_postgres:
             try:
-                return self._keyword_search_postgres(query, top_k)
+                return self._keyword_search_postgres(query, top_k, metadata_filter=metadata_filter)
             except Exception:
                 self._use_postgres = False
 
         tokenized_records: list[tuple[_MemoryRecord, list[str]]] = []
         df: dict[str, int] = {term: 0 for term in terms}
         for record in self._records.values():
+            if not self._metadata_matches(record.metadata, metadata_filter):
+                continue
             source = str(record.metadata.get("source", ""))
             snippet = str(record.metadata.get("snippet", ""))
             tokens = re.findall(r"[a-z0-9]+", f"{source} {snippet}".lower())
@@ -120,19 +134,27 @@ class PgVectorStore:
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
-    async def list_indexed_sources(self, limit: int = 200) -> list[dict]:
+    async def list_indexed_sources(
+        self,
+        limit: int = 200,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if limit <= 0:
             return []
 
         metadata_rows: list[dict[str, Any]] = []
         if self._use_postgres:
             try:
-                metadata_rows = self._list_metadata_postgres()
+                metadata_rows = self._list_metadata_postgres(metadata_filter=metadata_filter)
             except Exception:
                 self._use_postgres = False
 
         if not metadata_rows:
-            metadata_rows = [dict(record.metadata) for record in self._records.values()]
+            metadata_rows = [
+                dict(record.metadata)
+                for record in self._records.values()
+                if self._metadata_matches(record.metadata, metadata_filter)
+            ]
 
         return summarize_indexed_sources(metadata_rows, limit=limit)
 
@@ -183,18 +205,31 @@ class PgVectorStore:
             for item_id, vector, item_metadata in zip(ids, vectors, metadata, strict=True):
                 cursor.execute(statement, (item_id, self._vector_literal(vector), json_dumps(item_metadata)))
 
-    def _search_postgres(self, vector: list[float], top_k: int) -> list[dict]:
+    def _search_postgres(
+        self,
+        vector: list[float],
+        top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         assert self._connection is not None
 
+        where_clause = ""
+        params: list[Any] = []
+        vector_literal = self._vector_literal(vector)
+        params.append(vector_literal)
+        if metadata_filter:
+            where_clause = "WHERE metadata @> %s::jsonb"
+            params.append(json.dumps(metadata_filter))
         statement = f"""
             SELECT id, metadata, 1 - (embedding <=> %s::vector) AS score
             FROM {self._table_name}
+            {where_clause}
             ORDER BY embedding <=> %s::vector
             LIMIT %s
         """
-        vector_literal = self._vector_literal(vector)
+        params.extend([vector_literal, top_k])
         with self._connection.cursor() as cursor:
-            cursor.execute(statement, (vector_literal, vector_literal, top_k))
+            cursor.execute(statement, params)
             rows = cursor.fetchall()
         return [
             {
@@ -205,9 +240,20 @@ class PgVectorStore:
             for row in rows
         ]
 
-    def _keyword_search_postgres(self, query: str, top_k: int) -> list[dict]:
+    def _keyword_search_postgres(
+        self,
+        query: str,
+        top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         assert self._connection is not None
 
+        where_filter = ""
+        params: list[Any] = [query, query]
+        if metadata_filter:
+            where_filter = "AND metadata @> %s::jsonb"
+            params.append(json.dumps(metadata_filter))
+        params.append(top_k)
         statement = f"""
             SELECT
                 id,
@@ -219,23 +265,38 @@ class PgVectorStore:
             FROM {self._table_name}
             WHERE to_tsvector('simple', coalesce(metadata->>'source', '') || ' ' || coalesce(metadata->>'snippet', ''))
                   @@ plainto_tsquery('simple', %s)
+                  {where_filter}
             ORDER BY score DESC
             LIMIT %s
         """
         with self._connection.cursor() as cursor:
-            cursor.execute(statement, (query, query, top_k))
+            cursor.execute(statement, params)
             rows = cursor.fetchall()
         return [{"id": row[0], "metadata": row[1] or {}, "score": float(row[2] or 0.0)} for row in rows]
 
-    def _list_metadata_postgres(self) -> list[dict[str, Any]]:
+    def _list_metadata_postgres(self, metadata_filter: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         assert self._connection is not None
 
-        statement = f"SELECT metadata FROM {self._table_name}"
+        if metadata_filter:
+            statement = f"SELECT metadata FROM {self._table_name} WHERE metadata @> %s::jsonb"
+            params: tuple[Any, ...] = (json.dumps(metadata_filter),)
+        else:
+            statement = f"SELECT metadata FROM {self._table_name}"
+            params = ()
         with self._connection.cursor() as cursor:
-            cursor.execute(statement)
+            cursor.execute(statement, params)
             rows = cursor.fetchall()
         return [dict(row[0] or {}) for row in rows]
 
     @staticmethod
     def _vector_literal(vector: list[float]) -> str:
         return "[" + ",".join(f"{value:.8f}" for value in vector) + "]"
+
+    @staticmethod
+    def _metadata_matches(metadata: dict[str, Any], metadata_filter: dict[str, Any] | None) -> bool:
+        if not metadata_filter:
+            return True
+        for key, expected in metadata_filter.items():
+            if metadata.get(key) != expected:
+                return False
+        return True

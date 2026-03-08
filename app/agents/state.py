@@ -9,6 +9,7 @@ class AgentState:
     query: str
     trace: dict[str, str]
     allowed_tools: list[str]
+    retrieval_filter: dict[str, Any] = field(default_factory=dict)
     max_steps: int = 6
     tool_budget: int = 2
     retrieved_context: list[dict[str, Any]] = field(default_factory=list)
@@ -50,6 +51,7 @@ class AgentState:
             "query": self.query,
             "trace": dict(self.trace),
             "allowed_tools": list(self.allowed_tools),
+            "retrieval_filter": dict(self.retrieval_filter),
             "max_steps": self.max_steps,
             "tool_budget": self.tool_budget,
             "retrieved_context": [dict(item) for item in self.retrieved_context],
@@ -70,6 +72,7 @@ class AgentState:
             query=str(snapshot.get("query", "")),
             trace=dict(snapshot.get("trace", {})),
             allowed_tools=list(snapshot.get("allowed_tools", [])),
+            retrieval_filter=dict(snapshot.get("retrieval_filter", {})),
             max_steps=int(snapshot.get("max_steps", 6)),
             tool_budget=int(snapshot.get("tool_budget", 2)),
             retrieved_context=list(snapshot.get("retrieved_context", [])),

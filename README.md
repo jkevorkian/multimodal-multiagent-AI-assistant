@@ -10,8 +10,10 @@ Current delivery status (2026-03-08):
 - M0-M3 complete and consolidated.
 - M4.1 complete: video path now supports strict frame decode + per-frame VLM analysis + temporal aggregation, while preserving API contracts.
 - M2.3 complete: live runtime status telemetry + bounded revision orchestration (`/runs/{run_id}/events`, `/runs/{run_id}/status`).
-- M5.1 in progress: context compaction vertical slice (checkpoint schema + compactor + orchestrator guard + tests).
-- M5.2 in progress: steering baseline (profiles + grounding/tool policy enforcement).
+- M2.4 complete: durable chat sessions (multi-chat history), chat-scoped file/context storage, and transcript-grade runtime timeline.
+- M5.1 complete: context compaction slice (checkpoint schema + compactor + orchestrator guard + tests).
+- M5.2 complete: steering controls (profiles + grounding/tool policy enforcement).
+- Frontend chat workspace now uses backend-persisted sessions and run transcripts.
 
 ## Stack
 - Backend: FastAPI

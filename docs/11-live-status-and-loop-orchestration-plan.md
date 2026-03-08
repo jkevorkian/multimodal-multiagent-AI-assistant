@@ -7,6 +7,7 @@ Define a production-style implementation plan for:
 - deterministic anti-infinite-loop guardrails
 
 This plan keeps API compatibility with existing `/query` and `/agents/run` contracts.
+Follow-up extension for durable chat sessions and transcript-grade runtime detail is documented in `docs/12-chat-persistence-and-runtime-reasoning-plan.md` (`M2.4`).
 
 ## 2. Industrial Patterns Observed (Primary Sources)
 

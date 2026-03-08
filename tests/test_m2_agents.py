@@ -5,7 +5,12 @@ from app.tools.registry import ToolRegistry
 
 
 class _RetrieverStub:
-    async def retrieve(self, query: str, top_k: int = 5) -> list[dict]:  # noqa: ARG002
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        metadata_filter: dict | None = None,  # noqa: ARG002
+    ) -> list[dict]:
         return [
             {
                 "source": "doc://policy",

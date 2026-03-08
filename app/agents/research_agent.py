@@ -29,7 +29,11 @@ class ResearchAgent:
         state.record_step("research_agent")
 
         try:
-            state.retrieved_context = await self._retriever.retrieve(state.query, top_k=self._retrieval_top_k)
+            state.retrieved_context = await self._retriever.retrieve(
+                state.query,
+                top_k=self._retrieval_top_k,
+                metadata_filter=state.retrieval_filter or None,
+            )
         except Exception as exc:
             state.errors.append(f"retrieval_error:{exc}")
             state.retrieved_context = []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,7 @@ class HealthResponse(BaseModel):
 class IngestRequest(BaseModel):
     sources: list[str] = Field(min_length=1)
     source_type: str = Field(default="mixed")
+    metadata: dict[str, Any] | None = None
 
 
 class IngestResponse(BaseModel):
@@ -51,6 +53,7 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
     steering: SteeringRequest | None = None
+    metadata_filter: dict[str, Any] | None = None
 
 
 class QueryResponse(BaseModel):
@@ -66,6 +69,7 @@ class AgentRunRequest(BaseModel):
     tools: list[str] | None = None
     run_id: str | None = None
     steering: SteeringRequest | None = None
+    metadata_filter: dict[str, Any] | None = None
 
 
 class AgentRunResponse(BaseModel):

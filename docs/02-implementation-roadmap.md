@@ -11,6 +11,7 @@ Implement the assistant in milestone order so each phase is deployable, testable
 | M2 | ReAct tools + multi-agent orchestration | High | M1 |
 | M2.2 | Streamlit frontend + architecture visualization | Low | M2 |
 | M2.3 | Live run status + loop-safe revision orchestration | Medium | M2.2 |
+| M2.4 | Persistent chat sessions + scoped context + runtime transcript | High | M2.3, M5.1, M5.2 |
 | M3 | Image multimodal path | Medium | M2.2 |
 | M4 | Video MVP path | High | M3 |
 | M5 | Production hardening | High | M1-M4 |
@@ -169,6 +170,13 @@ Provide a lightweight UI to exercise backend routes and communicate the high-lev
 - Docs updates:
   - Add M2.2 rationale and traceability entries in didactic and file-level docs.
   - Document frontend usability features (tool multiselect via `/agents/tools`, clipboard image paste for ingest).
+  - Add multi-turn Chat tab plan/notes:
+    - conversation history with multiple user/assistant turns
+    - per-turn source ingestion (URIs, uploads, clipboard images)
+    - mode selection (`RAG Query` / `Agentic Run` / auto)
+    - optional multi-select tools for agent runs
+    - live run status box updates during agent execution
+    - compatibility with M5.1 compaction + M5.2 steering controls
 
 ### Risks and Mitigation
 - Risk: frontend drifts from backend contracts.
@@ -185,6 +193,8 @@ Provide a lightweight UI to exercise backend routes and communicate the high-lev
 ### Implementation Status
 - Current branch status (2026-03-04): implemented in current working tree.
 - Current branch status (2026-03-05): extended with tool-discovery UX and clipboard image paste ingestion.
+- Current branch status (2026-03-08): chat-tab extension implemented with multi-turn chat, per-turn ingest (URI/upload/clipboard), RAG/agentic mode selection, optional tool multiselect, and live status integration.
+- Current branch status (2026-03-08): chat workspace now uses durable backend sessions with persisted messages/files and revisit/continue behavior.
 
 ## M2.3 - Live Run Status + Loop-Safe Revision Orchestration
 ### Objective
@@ -229,6 +239,64 @@ Expose high-level runtime progress to end users ("thinking", "processing", "tool
 
 ### Implementation Status
 - Current branch status (2026-03-08): implemented with runtime event contract/event bus, `/runs/{run_id}/events` SSE + `/runs/{run_id}/status`, bounded revision loop behavior, and frontend runtime timeline/status panel.
+
+## M2.4 - Persistent Chat Sessions + Scoped Context + Runtime Transcript
+### Objective
+Turn chat from a frontend-only interaction into a durable backend feature with revisitable conversations, per-chat files/context isolation, and a scrollable step/evidence transcript during runs.
+
+### Outputs
+- Code modules:
+  - `app/contracts/chat.py`
+  - `app/storage/chat_store.py`
+  - `app/api/routes/chat.py`
+  - updates to `app/rag/ingestion.py`, `app/rag/retriever.py`, and vector-store adapters for metadata filtering
+  - updates to `app/core/event_bus.py` and runtime event metadata shaping for transcript details
+  - updates to `frontend/streamlit_app.py` chat workspace and transcript panel
+- Endpoints:
+  - `POST /chat/sessions`, `GET /chat/sessions`, `GET/PATCH /chat/sessions/{chat_id}`
+  - `POST/GET /chat/sessions/{chat_id}/messages`
+  - `POST /chat/sessions/{chat_id}/files`
+  - `GET /chat/sessions/{chat_id}/runs/{run_id}/events`
+- Features:
+  - durable multi-chat history (create/select/revisit/continue)
+  - per-chat file persistence and retrieval scoping (`chat_id` metadata filter)
+  - cohesive multi-turn context composition
+  - live scrollable transcript with stage history + retrieved evidence + tool/result details
+  - provider-aware reasoning rendering (explicit reasoning channel when exposed; structured execution trace otherwise)
+- Tests:
+  - chat-session persistence tests
+  - chat-scoped retrieval filter tests
+  - runtime transcript payload tests
+- Docs updates:
+  - implementation/research blueprint in `docs/12-chat-persistence-and-runtime-reasoning-plan.md`
+
+### Risks and Mitigation
+- Risk: cross-chat data leakage through retrieval.
+- Mitigation: mandatory `chat_id` filter in chat mode and explicit global-scope opt-in.
+
+- Risk: exposing hidden chain-of-thought in unsupported providers.
+- Mitigation: render only provider-exposed reasoning fields; fallback to structured execution evidence.
+
+- Risk: storage growth from files/events.
+- Mitigation: retention/archival policy per chat and bounded event windows.
+
+### Rollback/Fallback
+- Keep existing non-persistent Chat tab path available behind a feature flag until durable routes pass regression tests.
+
+### Definition of Done
+- Chats persist across app restarts and can be resumed.
+- Uploaded sources are attached to chat scope and retrieval is correctly filtered.
+- Transcript panel is scrollable and shows ordered step history with evidence/tool detail payloads.
+- Existing `/query`, `/agents/run`, and `/runs/*` routes remain backward compatible.
+
+### Implementation Status
+- Current branch status (2026-03-08): implemented.
+- Delivered in this slice:
+  - durable chat session APIs (`/chat/sessions*`) with persisted messages/files/run links.
+  - chat-scoped ingestion metadata tagging and retrieval filtering (`chat_id`, `message_id`, `scope`).
+  - runtime transcript enrichment (retrieval preview, analysis trace, answer preview, tool/error details).
+  - Streamlit Chat tab migrated from session-local state to backend-persisted multi-chat workflow.
+  - regression tests for session persistence, chat-scoped retrieval isolation, and transcript event detail payloads.
 
 ## M3 - Image Multimodal Path
 ### Objective

@@ -28,6 +28,7 @@ htmlcov/
 
 # Logs
 *.log
+data/*.db
 
 # Local environment / secrets
 .env

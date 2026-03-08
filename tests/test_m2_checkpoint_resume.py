@@ -5,7 +5,12 @@ from app.tools.registry import ToolRegistry
 
 
 class _Retriever:
-    async def retrieve(self, query: str, top_k: int = 5) -> list[dict]:  # noqa: ARG002
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        metadata_filter: dict | None = None,  # noqa: ARG002
+    ) -> list[dict]:
         return [{"source": "doc://resume", "snippet": "checkpoint resume behavior", "chunk_id": 0, "offset": 0, "score": 1.0}]
 
 

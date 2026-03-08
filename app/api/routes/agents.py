@@ -37,6 +37,7 @@ async def run_agents(
         tool_budget=settings.agent_tool_budget,
         max_steps=settings.agent_max_steps,
         resume_from_checkpoint=settings.agent_resume_from_checkpoint,
+        retrieval_filter=payload.metadata_filter,
     )
     citations = [
         f"{item['source']}#chunk-{item['chunk_id']}"

@@ -12,7 +12,11 @@ async def ingest_documents(
     request: Request,
     container: ServiceContainer = Depends(get_container),
 ) -> IngestResponse:
-    ingestion_summary = await container.ingestion.ingest(payload.sources, payload.source_type)
+    ingestion_summary = await container.ingestion.ingest(
+        payload.sources,
+        payload.source_type,
+        metadata_overrides=payload.metadata,
+    )
     return IngestResponse(
         status="accepted" if ingestion_summary.accepted_sources > 0 else "no_content",
         accepted_sources=ingestion_summary.accepted_sources,

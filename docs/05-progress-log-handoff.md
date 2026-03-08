@@ -1,12 +1,12 @@
 # 05 - Progress Log Handoff
 
 ## 1. Snapshot
-- Date: 2026-03-07
+- Date: 2026-03-08
 - Branch: `main`
-- Current HEAD: `a43ea7f` (multimodal visibility + vision hardening + indexed sources)
-- Working tree status: includes M2.3 planning surfaces (live status + loop-safe revision architecture/docs) pending commit
+- Current HEAD: working tree includes M2.4 implementation slice (persistent chat + scoped retrieval + transcript enrichment)
+- Working tree status: implementation and docs updates pending commit
 - Last full test run:
-  - `.\venv\Scripts\python.exe -m pytest -q` -> `54 passed`
+  - `.\venv\Scripts\python.exe -m pytest -q` -> `81 passed`
 
 ## 2. Milestone Status
 - M0: complete.
@@ -14,6 +14,7 @@
 - M2: complete (LangGraph orchestration + tool discovery endpoint).
 - M2.2: complete (Streamlit architecture + implementation flow, route playground).
 - M2.3: complete (runtime event stream + status endpoint + bounded revision loop + frontend status/events panel).
+- M2.4: complete (durable multi-chat sessions + chat-scoped retrieval + transcript-grade runtime timeline).
 - M3: complete and extended (vision preprocess/adapter/fusion + webpage image resolution).
 - M4.1: complete.
 - M5: planned.
@@ -98,6 +99,45 @@
 - Added regression tests:
   - `tests/test_m51_context_compaction.py`
 
+### 3.8 Frontend Chat Workspace Extension (Implemented)
+- Added dedicated `Chat` tab in `frontend/streamlit_app.py` for multi-turn conversations.
+- Each chat turn supports:
+  - mode selection (`RAG` / `agentic` / auto),
+  - optional agent tool multiselect,
+  - source ingestion via URIs, file upload, and clipboard image paste.
+- Agentic turns use compact live run status updates (M2.3 runtime stream/status integration).
+- Chat flow composes recent turns into contextual query payloads and remains compatible with backend compaction (M5.1) and steering (M5.2) controls.
+
+### 3.9 Research + Blueprint for Durable Chat and Rich Runtime Transcript
+- Completed an industry-backed research pass (as of 2026-03-08) and documented implementation blueprint in:
+  - `docs/12-chat-persistence-and-runtime-reasoning-plan.md`
+- Scope defined for next implementation slice:
+  - persistent chat sessions and server-side message/file storage,
+  - chat-scoped retrieval metadata filters,
+  - scrollable runtime transcript with stage/evidence/tool detail payloads,
+  - provider-aware reasoning rendering (reasoning channel when exposed; structured execution details otherwise).
+
+### 3.10 M2.4 Implementation Delivered
+- Added durable chat contracts/store/routes:
+  - `app/contracts/chat.py`
+  - `app/storage/chat_store.py`
+  - `app/api/routes/chat.py`
+  - `app/api/router.py` now mounts chat routes.
+- Added retrieval scoping support:
+  - `app/interfaces/vector_store.py`, `app/interfaces/retriever.py`
+  - `app/rag/ingestion.py`, `app/rag/retriever.py`
+  - `app/storage/pgvector_store.py`, `app/storage/qdrant_store.py`, `app/storage/fallback_vector_store.py`
+  - `app/contracts/schemas.py` now supports request-level metadata filters.
+- Runtime transcript enrichment:
+  - `app/agents/orchestrator.py`, `app/agents/answer_agent.py`, `app/core/event_bus.py`
+  - step events now include evidence/analysis/answer previews and normalized `event_family` metadata.
+- Frontend chat upgraded to persistent multi-chat:
+  - `frontend/streamlit_app.py` now uses backend chat sessions/messages and live transcript updates during agentic runs.
+- Regression tests added:
+  - `tests/test_m24_chat_sessions.py`
+  - `tests/test_m24_chat_scoped_retrieval.py`
+  - `tests/test_m24_runtime_transcript.py`
+
 ## 4. Config and Runtime Notes
 - `.env` / `.env.example` are organized for Ollama-only OpenAI-compatible local profile.
 - Current local model defaults documented around:
@@ -113,6 +153,8 @@
 - `docs/04-file-traceability-by-milestone.md`
 - `docs/08-multimodal-research-and-m41.md`
 - `docs/07-local-model-backends.md`
+- `docs/11-live-status-and-loop-orchestration-plan.md`
+- `docs/12-chat-persistence-and-runtime-reasoning-plan.md`
 - `frontend/architecture.py`
 
 ## 6. Known Caveats
@@ -121,6 +163,6 @@
 - Full-suite benchmark/eval artifacts remain M6 scope.
 
 ## 7. Suggested Immediate Next Step
-1. Start M5.1 context compaction: threshold-triggered checkpoint summaries + pinned-context schema + regression tests.
-2. Implement M5.2 steering baseline: request-level policy profile (style/tool/citation/risk controls) with contract tests.
-3. Begin M5.3 multimodal embedding stack: multivector payload model + adapter path while preserving current retrieval contract.
+1. Start M5.3 (multimodal embedding stack) in a separate branch with named-vector contract and adapter tests.
+2. Define migration strategy for chat store from SQLite to Postgres for multi-user deployment.
+3. Add pagination/retention controls for long chat transcripts and runtime events.

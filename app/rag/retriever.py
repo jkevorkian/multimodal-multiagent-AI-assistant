@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from app.interfaces.embedding import EmbeddingClient
 from app.interfaces.reranker import Reranker
 from app.interfaces.vector_store import VectorStore
@@ -24,7 +26,12 @@ class TextRAGRetriever:
         self._rrf_k = max(1, rrf_k)
         self._rerank_pool_size = max(1, rerank_pool_size)
 
-    async def retrieve(self, query: str, top_k: int = 5) -> list[dict]:
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if not query.strip() or top_k <= 0:
             return []
 
@@ -36,12 +43,26 @@ class TextRAGRetriever:
         try:
             query_vector = await self._embedding_client.embed_text(query)
             if any(abs(value) > 0 for value in query_vector):
-                dense_results = await self._vector_store.search(query_vector, top_k=dense_limit)
+                try:
+                    dense_results = await self._vector_store.search(
+                        query_vector,
+                        top_k=dense_limit,
+                        metadata_filter=metadata_filter,
+                    )
+                except TypeError:
+                    dense_results = await self._vector_store.search(query_vector, top_k=dense_limit)
         except Exception:
             dense_results = []
 
         try:
-            lexical_results = await self._vector_store.keyword_search(query=query, top_k=lexical_limit)
+            try:
+                lexical_results = await self._vector_store.keyword_search(
+                    query=query,
+                    top_k=lexical_limit,
+                    metadata_filter=metadata_filter,
+                )
+            except TypeError:
+                lexical_results = await self._vector_store.keyword_search(query=query, top_k=lexical_limit)
         except Exception:
             lexical_results = []
 
