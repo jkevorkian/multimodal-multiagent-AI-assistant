@@ -162,7 +162,10 @@ class DocumentIngestionService:
     async def _analyze_image_source(self, source: str) -> str:
         if self._vision_client is None:
             return f"Image source: {source}"
-        analysis = await self._vision_client.analyze_image(source)
+        try:
+            analysis = await self._vision_client.analyze_image(source)
+        except Exception:
+            analysis = "Vision provider unavailable. Indexed source metadata only."
         return f"Image source: {source}\nAnalysis: {analysis}"
 
     async def _analyze_video_source(self, source: str) -> str:
