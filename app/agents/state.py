@@ -24,6 +24,10 @@ class AgentState:
     def can_continue(self) -> bool:
         return self._step_count < self.max_steps
 
+    @property
+    def step_count(self) -> int:
+        return self._step_count
+
     def record_step(self, step_name: str) -> None:
         self._step_count += 1
         self.steps.append(step_name)

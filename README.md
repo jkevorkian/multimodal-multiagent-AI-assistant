@@ -6,9 +6,10 @@ Multimodal assistant with:
 - Vision and video endpoints
 - Streamlit frontend for end-to-end usage
 
-Current delivery status (2026-03-06):
+Current delivery status (2026-03-08):
 - M0-M3 complete and consolidated.
 - M4.1 complete: video path now supports strict frame decode + per-frame VLM analysis + temporal aggregation, while preserving API contracts.
+- M2.3 complete: live runtime status telemetry + bounded revision orchestration (`/runs/{run_id}/events`, `/runs/{run_id}/status`).
 - M5.1/M5.2 planned: context compaction (Codex-style) and steering controls.
 
 ## Stack

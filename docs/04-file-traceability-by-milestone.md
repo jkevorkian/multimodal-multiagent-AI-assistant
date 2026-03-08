@@ -414,6 +414,48 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: regression guard for architecture communication outputs.
 - Technical/practical role: verifies key DOT nodes (including multimodal and LLM layers) and explanatory flow points exist.
 
+## 6.1 M2.3 - Live Runtime Telemetry + Revision Loops
+
+`app/contracts/runtime_events.py`
+- Milestone metadata: introduced `M2.3`; status `implemented`.
+- Theoretical role: runtime progress contract boundary.
+- Technical/practical role: defines stream/snapshot event schemas (`run.started`, `agent.step.*`, `tool.call.*`, `run.completed`, `run.guardrail_triggered`).
+
+`app/core/event_bus.py`
+- Milestone metadata: introduced `M2.3`; status `implemented`.
+- Theoretical role: event propagation boundary.
+- Technical/practical role: publishes ordered run events to SSE consumers and status snapshots.
+
+`app/agents/loop_controller.py`
+- Milestone metadata: introduced `M2.3`; status `implemented`.
+- Theoretical role: bounded revision control boundary.
+- Technical/practical role: enforces deterministic loop exits (`max_steps`, tool budget, stagnation detection, timeout).
+
+`frontend/architecture.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.3`; status `implemented`.
+- Theoretical role: communicates advanced agent control flow and runtime telemetry model.
+- Technical/practical role: provides loop/revision graph and event/guardrail schema helpers for UI rendering.
+
+`frontend/streamlit_app.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.3`; status `implemented`.
+- Theoretical role: runtime visibility surface for operators/users.
+- Technical/practical role: renders loop graph, live-status event taxonomy, guardrail matrix, and runtime status/events panels backed by run endpoints.
+
+`app/api/routes/runs.py`
+- Milestone metadata: introduced `M2.3`; status `implemented`.
+- Theoretical role: runtime observability API boundary.
+- Technical/practical role: exposes `GET /runs/{run_id}/events` (SSE replay/follow) and `GET /runs/{run_id}/status` snapshot retrieval.
+
+`tests/test_m23_runtime_events.py`
+- Milestone metadata: introduced `M2.3`; status `implemented`.
+- Theoretical role: regression guard for runtime telemetry semantics.
+- Technical/practical role: validates event ordering, replay behavior, revision event emission, and guardrail-exit status snapshots.
+
+`tests/test_frontend_architecture.py`
+- Milestone metadata: introduced `M2.2`; updated `M2.3`; status `implemented`.
+- Theoretical role: regression guard for M2.3 architecture communication helpers.
+- Technical/practical role: validates loop graph guardrail nodes plus live-status and loop-guard schema helpers.
+
 ## 7. M3 - Image Multimodal Path
 
 `app/vision/__init__.py`

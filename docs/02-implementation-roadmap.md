@@ -10,6 +10,7 @@ Implement the assistant in milestone order so each phase is deployable, testable
 | M1 | Text RAG baseline | Medium | M0 |
 | M2 | ReAct tools + multi-agent orchestration | High | M1 |
 | M2.2 | Streamlit frontend + architecture visualization | Low | M2 |
+| M2.3 | Live run status + loop-safe revision orchestration | Medium | M2.2 |
 | M3 | Image multimodal path | Medium | M2.2 |
 | M4 | Video MVP path | High | M3 |
 | M5 | Production hardening | High | M1-M4 |
@@ -184,6 +185,50 @@ Provide a lightweight UI to exercise backend routes and communicate the high-lev
 ### Implementation Status
 - Current branch status (2026-03-04): implemented in current working tree.
 - Current branch status (2026-03-05): extended with tool-discovery UX and clipboard image paste ingestion.
+
+## M2.3 - Live Run Status + Loop-Safe Revision Orchestration
+### Objective
+Expose high-level runtime progress to end users ("thinking", "processing", "tool running", "revising") and support evaluator/revision loops with deterministic guards that prevent infinite cycles.
+
+### Outputs
+- Code modules:
+  - `app/contracts/runtime_events.py`
+  - `app/core/event_bus.py`
+  - `app/agents/loop_controller.py`
+  - `app/agents/progress_mapper.py`
+- Endpoints:
+  - `GET /runs/{run_id}/events` (SSE stream)
+  - `GET /runs/{run_id}/status` (latest snapshot)
+- Frontend:
+  - Live status banner and timeline panel in `frontend/streamlit_app.py`.
+  - Agent loop/revision visualization in `frontend/architecture.py`.
+- Tests:
+  - Event contract serialization tests (ordering + required fields).
+  - Loop guard tests (`max_steps`, `max_tool_calls`, stagnation, timeout).
+  - SSE reconnection/replay tests (last event id, resume).
+  - Agent runtime UX tests (status text transitions by stage).
+- Docs updates:
+  - Add runtime event taxonomy and state-transition guidance.
+  - Add industrial-pattern mapping and implementation blueprint in `docs/11-live-status-and-loop-orchestration-plan.md`.
+
+### Risks and Mitigation
+- Risk: noisy event streams overwhelm UI and operators.
+- Mitigation: coalesce repeated progress events and throttle non-critical updates.
+
+- Risk: revision loops can still burn budget with no quality gain.
+- Mitigation: enforce multi-guard termination (`max_steps`, stagnation detector, tool/time budgets) and emit explicit `guardrail_triggered` reason.
+
+### Rollback/Fallback
+- Disable live streaming and keep snapshot-only status endpoint if SSE transport causes instability.
+
+### Definition of Done
+- End users can see meaningful run status updates in near real time.
+- Agent revisions are observable and bounded by deterministic guardrails.
+- Tool usage status is surfaced when tools run (started/completed/failed with latency).
+- Failure and guardrail exits are explicit, not silent.
+
+### Implementation Status
+- Current branch status (2026-03-08): implemented with runtime event contract/event bus, `/runs/{run_id}/events` SSE + `/runs/{run_id}/status`, bounded revision loop behavior, and frontend runtime timeline/status panel.
 
 ## M3 - Image Multimodal Path
 ### Objective

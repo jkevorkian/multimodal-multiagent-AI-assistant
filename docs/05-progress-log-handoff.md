@@ -1,10 +1,10 @@
 # 05 - Progress Log Handoff
 
 ## 1. Snapshot
-- Date: 2026-03-06
+- Date: 2026-03-07
 - Branch: `main`
-- Current HEAD: `fdbcf90` (M2/M2.2/M3 consolidated commit)
-- Working tree status: includes M4.1 implementation + documentation updates pending commit
+- Current HEAD: `a43ea7f` (multimodal visibility + vision hardening + indexed sources)
+- Working tree status: includes M2.3 planning surfaces (live status + loop-safe revision architecture/docs) pending commit
 - Last full test run:
   - `.\venv\Scripts\python.exe -m pytest -q` -> `54 passed`
 
@@ -13,8 +13,9 @@
 - M1: complete and extended.
 - M2: complete (LangGraph orchestration + tool discovery endpoint).
 - M2.2: complete (Streamlit architecture + implementation flow, route playground).
+- M2.3: complete (runtime event stream + status endpoint + bounded revision loop + frontend status/events panel).
 - M3: complete and extended (vision preprocess/adapter/fusion + webpage image resolution).
-- M4.1: implemented in current working tree (pending commit).
+- M4.1: complete.
 - M5: planned.
 - M5.1 (context compaction): planned.
 - M5.2 (steering controls): planned.
@@ -72,13 +73,15 @@
 - Ingestion integration:
   - `DocumentIngestionService` now reuses video adapter pipeline so video timeline evidence is indexed into shared RAG.
 
-### 3.6 Planning Additions (M5.1 + M5.2)
+### 3.6 Planning Additions (M5.1 + M5.2 + M2.3)
 - Added roadmap/requirements entries for:
   - context compaction (Codex-style checkpoint summaries under token pressure)
   - steering controls (style/tool/grounding policy profiles)
+  - live runtime status event stream + loop-safe revision graph with deterministic guardrails
 - Updated frontend architecture diagram to reflect:
   - M4.1 frame-evidence flow
   - planned runtime controls for compaction and steering
+  - planned revision/evaluator loop with explicit infinite-loop prevention boundaries
 
 ## 4. Config and Runtime Notes
 - `.env` / `.env.example` are organized for Ollama-only OpenAI-compatible local profile.
@@ -103,7 +106,6 @@
 - Full-suite benchmark/eval artifacts remain M6 scope.
 
 ## 7. Suggested Immediate Next Step
-1. Commit current M4.1 + documentation synchronization set.
-2. Start M5.1 with a minimal context compaction slice (threshold trigger + pinned-context schema + tests).
-3. Follow with M5.2 steering baseline (profile contract + enforcement in `/query` and `/agents/run`).
-4. Then implement M5.3 multimodal embedding stack (Qwen3-VL embedding/reranker + Qdrant named vectors).
+1. Start M5.1 context compaction: threshold-triggered checkpoint summaries + pinned-context schema + regression tests.
+2. Implement M5.2 steering baseline: request-level policy profile (style/tool/citation/risk controls) with contract tests.
+3. Begin M5.3 multimodal embedding stack: multivector payload model + adapter path while preserving current retrieval contract.

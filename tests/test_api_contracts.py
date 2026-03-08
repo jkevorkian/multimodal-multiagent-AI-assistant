@@ -18,6 +18,8 @@ def test_required_routes_registered() -> None:
         "/query",
         "/agents/run",
         "/agents/tools",
+        "/runs/{run_id}/events",
+        "/runs/{run_id}/status",
         "/vision/analyze",
         "/video/analyze",
         "/metrics",
@@ -72,6 +74,7 @@ def test_agents_contract() -> None:
     response = client.post("/agents/run", json={"query": "Analyze this", "tools": ["web_search"]})
     payload = response.json()
     assert response.status_code == 200
+    assert "run_id" in payload
     assert "steps" in payload
     assert "tool_calls" in payload
     assert "trace" in payload

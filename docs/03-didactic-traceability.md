@@ -15,6 +15,7 @@ This document explains learning intent and technical reasoning during implementa
 | M1 | Text RAG | Chunking, neural embeddings, hybrid retrieval, reranking, retrieval grounding | PostgreSQL, PGVector, neural embedding adapters, rank fusion |
 | M2 | Multi-agent ReAct | Agent roles, shared state, tool routing, bounded reasoning loops, durable checkpoints | LangGraph StateGraph, MCP tool adapters, tool registry patterns |
 | M2.2 | Frontend architecture visibility | API contract usability, architecture communication, backend/frontend coupling boundaries | Streamlit, Graphviz DOT, HTTP API clients |
+| M2.3 | Live runtime telemetry + revision loops | Event streaming, progress observability, evaluator/reviser loops, termination guardrails | SSE, runtime event bus, loop-controller patterns |
 | M3 | Image path | Input preprocessing, multimodal inference, evidence fusion | Vision model adapters |
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
 | M5.1 | Context compaction | Token-budget control, state summarization, memory safety invariants | Session/context manager patterns, summary checkpoints |
@@ -98,6 +99,24 @@ Streamlit allows a low-friction teaching UI without introducing a heavy frontend
 - A frontend helper test validates diagram content and flow explanation presence.
 - Agent tool selection moved from free-text input to discoverable multiselect, populated from `/agents/tools`.
 - Ingestion UX now supports clipboard image paste (`Ctrl+V`) in addition to file upload.
+
+## M2.3 - Live Runtime Telemetry + Revision Loops
+### How it works
+A runtime event bus emits ordered status events per run (`run.started`, `agent.step.started`, `tool.call.started`, `model.call.in_progress`, `run.completed`, `run.guardrail_triggered`) while an evaluator/reviser loop decides whether to approve or revise intermediate drafts.
+
+Current status (2026-03-08): implemented with `/runs/{run_id}/events` (SSE), `/runs/{run_id}/status`, runtime event/status mapping, and bounded revision iterations in the LangGraph orchestration path.
+
+### Why it works
+Users get immediate, high-level insight into pipeline progress while deterministic loop guardrails prevent infinite revision cycles.
+
+### Why this technology fits
+SSE and append-only event sequencing are lightweight for local deployment, and loop-controller guardrails align with bounded orchestration behavior already present in agent settings.
+
+### Industrial implementation notes
+- LangGraph production guidance relies on graph control flow plus persistence/checkpointing, with recursion/loop limits to prevent runaway cycles.
+- OpenAI Responses API exposes granular streaming events (`response.output_text.delta`, tool-call deltas, completion/failure) suitable for user-facing progress mapping.
+- AutoGen exposes explicit termination conditions (e.g., max message/turn limits) that map directly to loop guardrail policy.
+- AWS Bedrock and Vertex agent stacks expose trace/monitoring primitives so operators can inspect multi-step agent execution.
 
 ## M3 - Image Multimodal
 ### How it works
@@ -453,6 +472,17 @@ Use this entry template for every major decision:
 - Observed outcome: webpage URLs now resolve to concrete image data URIs for model calls.
 - Would we choose it again?: yes.
 - Affected modules: `app/vision/preprocess.py`, `tests/test_m3_vision.py`, `frontend/architecture.py`.
+
+- Date: 2026-03-07
+- Milestone: M2.3 planning
+- Context: users need live visibility into what the assistant is doing between calls, and next-step orchestration requires revision loops without infinite-loop risk.
+- Decision: introduce a dedicated milestone for runtime status events + loop-safe revision orchestration, with SSE event streaming and explicit termination guards.
+- Alternatives considered: keep polling-only status, keep linear non-revising agent flow.
+- Why chosen: improves UX transparency and enables higher-quality iterative reasoning while remaining operationally bounded.
+- Expected impact: better perceived responsiveness, clearer debugging, safer evaluator/reviser loops.
+- Observed outcome: roadmap + frontend architecture now include event taxonomy and revision-loop guardrail design surfaces.
+- Would we choose it again?: yes.
+- Affected modules: `docs/02-implementation-roadmap.md`, `docs/03-didactic-traceability.md`, `frontend/architecture.py`, `frontend/streamlit_app.py`, `tests/test_frontend_architecture.py`.
 
 ### What Changed in Understanding (M2.2)
 - A lightweight frontend can be introduced without violating milestone isolation if it only consumes stable backend contracts.

@@ -12,6 +12,7 @@ from app.agents import (
     ResearchAgent,
 )
 from app.core.config import settings
+from app.core.event_bus import InMemoryEventBus, get_event_bus
 from app.interfaces import EmbeddingClient, LLMClient, Reranker, Retriever, Tool, VectorStore, VideoClient, VisionClient
 from app.llm import build_llm_client
 from app.multimodal import build_multimodal_clients
@@ -41,6 +42,7 @@ class ServiceContainer:
     tools: list[Tool]
     tool_registry: ToolRegistry
     orchestrator: AgentOrchestrator
+    event_bus: InMemoryEventBus
     embedding_provider: str
     llm_provider: str
     reranker_provider: str
@@ -145,12 +147,14 @@ def _build_service_container_internal(
     )
     tools: list[Tool] = [StubTool()]
     tool_registry = ToolRegistry(tools)
+    event_bus = InMemoryEventBus() if disable_external_api else get_event_bus()
     research_agent = ResearchAgent(
         retriever=retriever,
         tool_registry=tool_registry,
         retrieval_top_k=settings.agent_retrieval_top_k,
         tool_timeout_sec=settings.agent_tool_timeout_sec,
         tool_retries=settings.agent_tool_retries,
+        event_bus=event_bus,
     )
     checkpoint_store = InMemoryCheckpointStore() if settings.agent_checkpoint_enabled else NullCheckpointStore()
     llm_selection = build_llm_client(
@@ -162,13 +166,14 @@ def _build_service_container_internal(
         max_tokens=settings.llm_max_tokens,
     )
     llm = llm_selection.client
-    answer_agent = AnswerAgent(llm=llm)
+    answer_agent = AnswerAgent(llm=llm, event_bus=event_bus)
     orchestrator = AgentOrchestrator(
         research_agent=research_agent,
         analyst_agent=AnalystAgent(),
         answer_agent=answer_agent,
         checkpoint_store=checkpoint_store,
         max_steps=settings.agent_max_steps,
+        event_bus=event_bus,
     )
 
     return ServiceContainer(
@@ -183,6 +188,7 @@ def _build_service_container_internal(
         tools=tools,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
+        event_bus=event_bus,
         embedding_provider=embedding_selection.provider_name,
         llm_provider=llm_selection.provider_name,
         reranker_provider=reranker_selection.provider_name,

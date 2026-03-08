@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tempfile
 import uuid
 from pathlib import Path
@@ -17,17 +18,23 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     from frontend.architecture import (
+        agent_loop_guardrail_rows,
         agent_pipeline_state_rows,
+        build_agents_revision_loop_dot,
         build_agents_pipeline_dot,
         build_architecture_dot,
         high_level_flow_points,
+        live_status_event_rows,
     )
 except ModuleNotFoundError:
     from architecture import (
+        agent_loop_guardrail_rows,
         agent_pipeline_state_rows,
+        build_agents_revision_loop_dot,
         build_agents_pipeline_dot,
         build_architecture_dot,
         high_level_flow_points,
+        live_status_event_rows,
     )
 
 
@@ -95,9 +102,48 @@ def _request_json(
         return 0, {"error": str(error), "url": url}
 
 
+def _request_text(
+    method: str,
+    base_url: str,
+    path: str,
+) -> tuple[int, str | dict[str, Any]]:
+    url = f"{base_url.rstrip('/')}{path}"
+    timeout_sec = float(st.session_state.get("request_timeout_sec", REQUEST_TIMEOUT_SEC))
+    try:
+        with httpx.Client(timeout=timeout_sec) as client:
+            response = client.request(method=method, url=url)
+        return response.status_code, response.text
+    except httpx.HTTPError as error:
+        return 0, {"error": str(error), "url": url}
+
+
 def _render_response(status_code: int, body: dict[str, Any] | list[Any] | str) -> None:
     if status_code == 0:
-        st.error("Request failed before reaching backend.")
+        connection_error = ""
+        attempted_url = ""
+        if isinstance(body, dict):
+            connection_error = str(body.get("error", ""))
+            attempted_url = str(body.get("url", ""))
+        normalized_error = connection_error.lower()
+        is_connection_refused = (
+            "connection refused" in normalized_error
+            or "actively refused" in normalized_error
+            or "winerror 10061" in normalized_error
+            or "errno 111" in normalized_error
+        )
+        if is_connection_refused:
+            st.error(
+                "Request failed before reaching backend: connection refused. "
+                "Start FastAPI on the configured base URL or update the URL in the sidebar."
+            )
+            st.code(
+                "venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
+                language="powershell",
+            )
+        else:
+            st.error("Request failed before reaching backend.")
+        if attempted_url:
+            st.caption(f"Attempted URL: {attempted_url}")
     elif 200 <= status_code < 300:
         st.success(f"HTTP {status_code}")
     else:
@@ -239,6 +285,52 @@ def _extract_agent_execution_from_payload(payload: dict[str, Any] | list[Any] | 
     return steps, tool_calls
 
 
+def _parse_sse_events(raw_body: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for block in raw_body.split("\n\n"):
+        if not block.strip():
+            continue
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("data:"):
+                data_lines.append(stripped[5:].strip())
+        if not data_lines:
+            continue
+        payload_text = "\n".join(data_lines).strip()
+        if not payload_text:
+            continue
+        try:
+            parsed = json.loads(payload_text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            events.append(parsed)
+    return events
+
+
+def _fetch_run_status(base_url: str, run_id: str) -> tuple[int, dict[str, Any] | str]:
+    return _request_json("GET", base_url, f"/runs/{run_id}/status")
+
+
+def _fetch_run_events(base_url: str, run_id: str, after_sequence: int = 0) -> tuple[int, list[dict[str, Any]], str | None]:
+    status_code, body = _request_text(
+        "GET",
+        base_url,
+        f"/runs/{run_id}/events?follow=false&after_sequence={max(after_sequence, 0)}",
+    )
+    if status_code == 0:
+        error_text = body.get("error", "request_error") if isinstance(body, dict) else "request_error"
+        return status_code, [], str(error_text)
+    if not (200 <= status_code < 300):
+        if isinstance(body, str) and body.strip():
+            return status_code, [], body.strip()
+        return status_code, [], f"HTTP {status_code}"
+    if not isinstance(body, str):
+        return status_code, [], "Unexpected SSE response payload."
+    return status_code, _parse_sse_events(body), None
+
+
 def _render_agents_pipeline_helper(latest_payload: dict[str, Any] | list[Any] | str) -> None:
     steps, tool_calls = _extract_agent_execution_from_payload(latest_payload)
     st.markdown("### Pipeline Visualizer")
@@ -250,6 +342,82 @@ def _render_agents_pipeline_helper(latest_payload: dict[str, Any] | list[Any] | 
         st.caption(f"Last run tool calls: {', '.join(tool_calls)}")
     st.markdown("### Stage Logic and State Changes")
     st.dataframe(agent_pipeline_state_rows(), hide_index=True, use_container_width=True)
+
+
+def _render_agents_runtime_plan_helper() -> None:
+    st.markdown("### Loop/Revision Graph (M2.3)")
+    st.caption("Runtime flow uses bounded revision passes with explicit loop and budget guardrails.")
+    st.graphviz_chart(build_agents_revision_loop_dot())
+    st.markdown("### Loop Guardrails")
+    st.dataframe(agent_loop_guardrail_rows(), hide_index=True, use_container_width=True)
+    st.markdown("### Live Run Status Event Contract")
+    st.dataframe(live_status_event_rows(), hide_index=True, use_container_width=True)
+
+
+def _render_agents_runtime_live_helper(backend_url: str) -> None:
+    st.markdown("### Live Runtime Status (M2.3)")
+    default_run_id = str(st.session_state.get("last_agents_run_id", "")).strip()
+    run_id = st.text_input("Run ID", value=default_run_id, key="agents_runtime_run_id").strip()
+    if run_id and run_id != default_run_id:
+        st.session_state["last_agents_run_id"] = run_id
+
+    left, right = st.columns(2)
+    with left:
+        if st.button("Refresh status", key="agents_refresh_status"):
+            if not run_id:
+                st.error("Provide a run ID first.")
+            else:
+                status_code, body = _fetch_run_status(backend_url, run_id)
+                if 200 <= status_code < 300 and isinstance(body, dict):
+                    st.session_state["last_agents_run_status"] = body
+                else:
+                    st.error(f"Failed to fetch status (HTTP {status_code}).")
+                    if body:
+                        st.code(str(body), language="text")
+    with right:
+        if st.button("Fetch all events", key="agents_fetch_events"):
+            if not run_id:
+                st.error("Provide a run ID first.")
+            else:
+                status_code, events, error = _fetch_run_events(backend_url, run_id, after_sequence=0)
+                if 200 <= status_code < 300:
+                    st.session_state["last_agents_run_events"] = events
+                    if events:
+                        st.session_state["last_agents_run_last_sequence"] = int(
+                            max(int(item.get("sequence_number", 0)) for item in events)
+                        )
+                else:
+                    st.error(f"Failed to fetch events (HTTP {status_code}).")
+                    if error:
+                        st.code(error, language="text")
+
+    status_payload = st.session_state.get("last_agents_run_status", {})
+    if isinstance(status_payload, dict) and status_payload.get("run_id"):
+        st.caption(
+            "Status: "
+            f"{status_payload.get('state', 'unknown')} | "
+            f"{status_payload.get('status_text', '')}"
+        )
+        st.json(status_payload)
+    else:
+        st.info("No status snapshot loaded yet.")
+
+    raw_events = st.session_state.get("last_agents_run_events", [])
+    parsed_events = [item for item in raw_events if isinstance(item, dict)]
+    if parsed_events:
+        timeline_rows = [
+            {
+                "seq": int(item.get("sequence_number", 0)),
+                "type": str(item.get("event_type", "")),
+                "status_text": str(item.get("status_text", "")),
+                "agent": str(item.get("agent", "") or ""),
+                "tool": str(item.get("tool", "") or ""),
+            }
+            for item in parsed_events
+        ]
+        st.dataframe(timeline_rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("No events loaded yet.")
 
 
 def main() -> None:
@@ -376,6 +544,12 @@ def main() -> None:
                 if impl_tools:
                     payload["tools"] = impl_tools
                 status_code, body = _request_json("POST", backend_url, "/agents/run", payload=payload)
+                if 200 <= status_code < 300 and isinstance(body, dict):
+                    run_id_value = str(body.get("run_id", "")).strip()
+                    if run_id_value:
+                        st.session_state["last_agents_run_id"] = run_id_value
+                        st.session_state["agents_runtime_run_id"] = run_id_value
+                        st.caption(f"Run ID: `{run_id_value}`")
             _render_response(status_code, body)
             _render_answer_block("Assistant Output", body)
 
@@ -556,6 +730,8 @@ def main() -> None:
         st.caption("Default agent pipeline: research_agent -> analyst_agent -> answer_agent.")
         latest_agents_payload = st.session_state.get("last_agents_run_payload", {})
         _render_agents_pipeline_helper(latest_agents_payload)
+        _render_agents_runtime_plan_helper()
+        _render_agents_runtime_live_helper(backend_url)
         agent_query = st.text_area("Agent query", value="Analyze available context and summarize findings.")
         selected_tools = st.multiselect(
             "Allowed tools (optional)",
@@ -579,6 +755,20 @@ def main() -> None:
             status_code, body = _request_json("POST", backend_url, "/agents/run", payload=payload)
             if 200 <= status_code < 300 and isinstance(body, dict):
                 st.session_state["last_agents_run_payload"] = body
+                run_id_value = str(body.get("run_id", "")).strip()
+                if run_id_value:
+                    st.session_state["last_agents_run_id"] = run_id_value
+                    st.session_state["agents_runtime_run_id"] = run_id_value
+                    status_fetch_code, status_payload = _fetch_run_status(backend_url, run_id_value)
+                    if 200 <= status_fetch_code < 300 and isinstance(status_payload, dict):
+                        st.session_state["last_agents_run_status"] = status_payload
+                    events_fetch_code, events_payload, _ = _fetch_run_events(backend_url, run_id_value, after_sequence=0)
+                    if 200 <= events_fetch_code < 300:
+                        st.session_state["last_agents_run_events"] = events_payload
+                        if events_payload:
+                            st.session_state["last_agents_run_last_sequence"] = int(
+                                max(int(item.get("sequence_number", 0)) for item in events_payload)
+                            )
             _render_response(status_code, body)
 
     with vision_tab:

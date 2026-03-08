@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Iterable
 
 from app.interfaces.tool import Tool
@@ -37,14 +38,36 @@ class ToolRegistry:
         attempts = 0
         while True:
             attempts += 1
+            started_at = time.perf_counter()
             try:
                 result = await asyncio.wait_for(self._tools[tool_name].run(payload), timeout=timeout_sec)
-                return {"tool": tool_name, "status": "ok", "result": result, "attempts": attempts}
+                latency_ms = int((time.perf_counter() - started_at) * 1000)
+                return {
+                    "tool": tool_name,
+                    "status": "ok",
+                    "result": result,
+                    "attempts": attempts,
+                    "latency_ms": latency_ms,
+                }
             except asyncio.TimeoutError:
                 if attempts > max_retries:
-                    return {"tool": tool_name, "status": "error", "error": "timeout", "attempts": attempts}
+                    latency_ms = int((time.perf_counter() - started_at) * 1000)
+                    return {
+                        "tool": tool_name,
+                        "status": "error",
+                        "error": "timeout",
+                        "attempts": attempts,
+                        "latency_ms": latency_ms,
+                    }
                 await asyncio.sleep(0.05 * attempts)
             except Exception as exc:
                 if attempts > max_retries:
-                    return {"tool": tool_name, "status": "error", "error": str(exc), "attempts": attempts}
+                    latency_ms = int((time.perf_counter() - started_at) * 1000)
+                    return {
+                        "tool": tool_name,
+                        "status": "error",
+                        "error": str(exc),
+                        "attempts": attempts,
+                        "latency_ms": latency_ms,
+                    }
                 await asyncio.sleep(0.05 * attempts)

@@ -60,9 +60,11 @@ class QueryResponse(BaseModel):
 class AgentRunRequest(BaseModel):
     query: str = Field(min_length=1)
     tools: list[str] | None = None
+    run_id: str | None = None
 
 
 class AgentRunResponse(BaseModel):
+    run_id: str
     answer: str
     steps: list[str]
     tool_calls: list[str]

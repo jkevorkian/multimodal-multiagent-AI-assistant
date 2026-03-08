@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Request
+from uuid import uuid4
 
 from app.contracts.schemas import AgentRunRequest, AgentRunResponse, AgentToolInfo, AgentToolsResponse, Trace
 from app.core.config import settings
@@ -13,17 +14,20 @@ async def run_agents(
     request: Request,
     container: ServiceContainer = Depends(get_container),
 ) -> AgentRunResponse:
+    run_id = payload.run_id or str(uuid4())
     # If tools are omitted (or an empty list is provided), enable all registered tools.
     enabled_tools = payload.tools or container.tool_registry.list_tools()
     orchestration_state = await container.orchestrator.run(
         query=payload.query,
         trace={"request_id": request.state.request_id, "trace_id": request.state.trace_id},
+        run_id=run_id,
         allowed_tools=enabled_tools,
         tool_budget=settings.agent_tool_budget,
         max_steps=settings.agent_max_steps,
         resume_from_checkpoint=settings.agent_resume_from_checkpoint,
     )
     return AgentRunResponse(
+        run_id=run_id,
         answer=orchestration_state.final_answer,
         steps=orchestration_state.steps,
         tool_calls=orchestration_state.tool_calls,
