@@ -562,22 +562,37 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: error taxonomy boundary across application layers.
 - Technical/practical role: standardizes exception types and API error mapping.
 
-## 10. M5.1 - Context Compaction (Planned)
+## 10. M5.1 - Context Compaction
 
 `app/core/context_compaction.py`
-- Milestone metadata: introduced `M5.1`; status `planned`.
+- Milestone metadata: introduced `M5.1`; status `implemented`.
 - Theoretical role: context-budget control boundary for long sessions.
 - Technical/practical role: triggers threshold-based compaction and produces durable summary checkpoints with preservation invariants.
 
 `app/agents/context_manager.py`
-- Milestone metadata: introduced `M5.1`; status `planned`.
+- Milestone metadata: introduced `M5.1`; status `implemented`.
 - Theoretical role: orchestration memory lifecycle boundary.
 - Technical/practical role: applies compaction decisions to agent state before/after stages.
 
 `app/contracts/context.py`
-- Milestone metadata: introduced `M5.1`; status `planned`.
+- Milestone metadata: introduced `M5.1`; status `implemented`.
 - Theoretical role: compacted-context contract boundary.
 - Technical/practical role: defines summary checkpoint schema and pinned-context fields.
+
+`app/agents/orchestrator.py`
+- Milestone metadata: introduced `M0`; updated `M5.1`; status `implemented`.
+- Theoretical role change: orchestration loop now includes memory-budget control before graph execution.
+- Technical/practical change: calls context manager pre-step and emits runtime telemetry event when compaction is applied.
+
+`app/agents/state.py`
+- Milestone metadata: introduced `M2`; updated `M5.1`; status `implemented`.
+- Theoretical role change: state now includes durable compaction checkpoints.
+- Technical/practical change: snapshot schema extended with `context_checkpoints`.
+
+`tests/test_m51_context_compaction.py`
+- Milestone metadata: introduced `M5.1`; status `implemented`.
+- Theoretical role: regression guard for token-budget compaction behavior.
+- Technical/practical role: validates threshold trigger, pinned-context invariants, and runtime event emission for compaction.
 
 ## 11. M5.2 - Steering and Policy Controls (Planned)
 

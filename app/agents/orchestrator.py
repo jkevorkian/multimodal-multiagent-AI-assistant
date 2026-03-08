@@ -8,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.analyst_agent import AnalystAgent
 from app.agents.answer_agent import AnswerAgent
 from app.agents.checkpoint_store import NullCheckpointStore
+from app.agents.context_manager import AgentContextManager
 from app.agents.loop_controller import LoopController
 from app.agents.research_agent import ResearchAgent
 from app.agents.state import AgentState
@@ -28,6 +29,7 @@ class AgentOrchestrator:
         max_steps: int = 6,
         event_bus: InMemoryEventBus | None = None,
         run_timeout_sec: float = 30.0,
+        context_manager: AgentContextManager | None = None,
     ) -> None:
         self._research_agent = research_agent
         self._analyst_agent = analyst_agent
@@ -36,6 +38,7 @@ class AgentOrchestrator:
         self._max_steps = max_steps
         self._event_bus = event_bus
         self._run_timeout_sec = run_timeout_sec
+        self._context_manager = context_manager
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -209,6 +212,25 @@ class AgentOrchestrator:
         revision_iteration = 0
         guardrail = None
         while True:
+            if self._context_manager is not None:
+                context_result = self._context_manager.apply_pre_step_guard(state)
+                if context_result.compacted:
+                    await self._emit_event(
+                        run_id=resolved_run_id,
+                        trace_id=trace_id,
+                        event_type="agent.revision.requested",
+                        status_text="Compacting context under token budget pressure.",
+                        metadata={
+                            "reason_code": "context_compaction",
+                            "previous_token_estimate": context_result.compaction.previous_token_estimate,
+                            "compacted_token_estimate": context_result.compaction.compacted_token_estimate,
+                            "checkpoint_id": (
+                                context_result.compaction.checkpoint.checkpoint_id
+                                if context_result.compaction.checkpoint
+                                else ""
+                            ),
+                        },
+                    )
             state.trace["revision_iteration"] = str(revision_iteration)
             try:
                 result = await self._graph.ainvoke({"agent_state": state})

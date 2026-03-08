@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     agent_retrieval_top_k: int = 5
     agent_checkpoint_enabled: bool = True
     agent_resume_from_checkpoint: bool = True
+    context_compaction_enabled: bool = True
+    context_compaction_token_threshold: int = 1500
+    context_compaction_target_token_threshold: int = 750
 
     model_config = SettingsConfigDict(
         env_prefix="MMAA_",

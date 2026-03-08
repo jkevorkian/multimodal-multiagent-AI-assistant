@@ -162,10 +162,11 @@ Operational safeguards reduce tail failure rates and cost variance under realist
 ### Why this technology fits
 Composable middleware-style utilities keep resilience logic centralized and testable.
 
-### M5.1 context compaction plan (Codex-style)
+### M5.1 context compaction (Codex-style)
 - Trigger compaction when session/orchestration context crosses a token threshold.
 - Preserve pinned blocks (requirements, user constraints, tool outputs, citations, open tasks).
 - Replace old turns with compacted summary checkpoints and continue processing from compact state.
+- Current status (2026-03-08): vertical slice implemented with `ContextCompactor`, `AgentContextManager`, checkpoint schema, orchestrator pre-step guard, and regression tests.
 
 ### M5.2 steering plan
 - Add explicit steering profiles (`balanced`, `concise`, `strict-grounded`, `creative`) at request/session level.

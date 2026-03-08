@@ -14,6 +14,7 @@ class AgentState:
     retrieved_context: list[dict[str, Any]] = field(default_factory=list)
     tool_outputs: list[dict[str, Any]] = field(default_factory=list)
     analysis_notes: list[str] = field(default_factory=list)
+    context_checkpoints: list[dict[str, Any]] = field(default_factory=list)
     confidence: float = 0.0
     final_answer: str = ""
     steps: list[str] = field(default_factory=list)
@@ -54,6 +55,7 @@ class AgentState:
             "retrieved_context": [dict(item) for item in self.retrieved_context],
             "tool_outputs": [dict(item) for item in self.tool_outputs],
             "analysis_notes": list(self.analysis_notes),
+            "context_checkpoints": [dict(item) for item in self.context_checkpoints],
             "confidence": self.confidence,
             "final_answer": self.final_answer,
             "steps": list(self.steps),
@@ -73,6 +75,7 @@ class AgentState:
             retrieved_context=list(snapshot.get("retrieved_context", [])),
             tool_outputs=list(snapshot.get("tool_outputs", [])),
             analysis_notes=list(snapshot.get("analysis_notes", [])),
+            context_checkpoints=list(snapshot.get("context_checkpoints", [])),
             confidence=float(snapshot.get("confidence", 0.0)),
             final_answer=str(snapshot.get("final_answer", "")),
             steps=list(snapshot.get("steps", [])),

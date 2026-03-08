@@ -11,7 +11,9 @@ from app.agents import (
     NullCheckpointStore,
     ResearchAgent,
 )
+from app.agents.context_manager import AgentContextManager
 from app.core.config import settings
+from app.core.context_compaction import ContextCompactor
 from app.core.event_bus import InMemoryEventBus, get_event_bus
 from app.interfaces import EmbeddingClient, LLMClient, Reranker, Retriever, Tool, VectorStore, VideoClient, VisionClient
 from app.llm import build_llm_client
@@ -167,6 +169,13 @@ def _build_service_container_internal(
     )
     llm = llm_selection.client
     answer_agent = AnswerAgent(llm=llm, event_bus=event_bus)
+    context_manager = AgentContextManager(
+        compactor=ContextCompactor(
+            token_threshold=settings.context_compaction_token_threshold,
+            target_token_threshold=settings.context_compaction_target_token_threshold,
+        ),
+        enabled=settings.context_compaction_enabled,
+    )
     orchestrator = AgentOrchestrator(
         research_agent=research_agent,
         analyst_agent=AnalystAgent(),
@@ -174,6 +183,7 @@ def _build_service_container_internal(
         checkpoint_store=checkpoint_store,
         max_steps=settings.agent_max_steps,
         event_bus=event_bus,
+        context_manager=context_manager,
     )
 
     return ServiceContainer(

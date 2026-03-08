@@ -17,7 +17,7 @@
 - M3: complete and extended (vision preprocess/adapter/fusion + webpage image resolution).
 - M4.1: complete.
 - M5: planned.
-- M5.1 (context compaction): planned.
+- M5.1 (context compaction): in progress (vertical slice implemented).
 - M5.2 (steering controls): planned.
 - M5.3 (multimodal embeddings stack): planned.
 - M6+: planned.
@@ -82,6 +82,21 @@
   - M4.1 frame-evidence flow
   - planned runtime controls for compaction and steering
   - planned revision/evaluator loop with explicit infinite-loop prevention boundaries
+
+### 3.7 M5.1 Context Compaction Vertical Slice
+- Added context compaction schema + runtime modules:
+  - `app/contracts/context.py`
+  - `app/core/context_compaction.py`
+  - `app/agents/context_manager.py`
+- Integrated orchestrator pre-step memory guard:
+  - `app/agents/orchestrator.py` now applies context compaction under token pressure before each graph pass.
+  - Emits runtime event with `reason_code=context_compaction` when triggered.
+- State/config wiring:
+  - `app/agents/state.py` now stores durable `context_checkpoints`.
+  - `app/core/config.py` adds compaction settings (`context_compaction_*`).
+  - `app/core/dependencies.py` wires context manager into orchestrator.
+- Added regression tests:
+  - `tests/test_m51_context_compaction.py`
 
 ## 4. Config and Runtime Notes
 - `.env` / `.env.example` are organized for Ollama-only OpenAI-compatible local profile.

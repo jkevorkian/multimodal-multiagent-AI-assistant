@@ -371,6 +371,14 @@ Prevent context-window overflow by compacting long agent/query sessions into dur
 - Compacted state preserves critical facts and constraints in tests.
 - Latency/token usage improves on long-session benchmarks without citation-quality regression.
 
+### Implementation Status
+- Current branch status (2026-03-08): M5.1 vertical slice implemented in current working tree.
+- Delivered in this slice:
+  - `ContextCheckpoint` + pinned-context schema (`goals`, `constraints`, `citations`, `open_tasks`, `tool_outputs`).
+  - Threshold-based compactor and context manager.
+  - Orchestrator pre-step compaction guard with runtime telemetry event (`reason_code=context_compaction`).
+  - Regression tests for trigger/invariants and runtime event emission.
+
 ## M5.2 - Steering and Policy Controls
 ### Objective
 Add explicit steering controls so users/operators can shape style, risk posture, tool usage, and citation strictness without changing prompt templates manually.
