@@ -18,7 +18,7 @@
 - M4.1: complete.
 - M5: planned.
 - M5.1 (context compaction): in progress (vertical slice implemented).
-- M5.2 (steering controls): planned.
+- M5.2 (steering controls): in progress (baseline implemented).
 - M5.3 (multimodal embeddings stack): planned.
 - M6+: planned.
 

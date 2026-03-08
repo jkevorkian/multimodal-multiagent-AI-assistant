@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.contracts.steering import SteeringApplied, SteeringRequest
+
 
 class Trace(BaseModel):
     request_id: str
@@ -48,12 +50,14 @@ class IndexedSourcesResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
+    steering: SteeringRequest | None = None
 
 
 class QueryResponse(BaseModel):
     answer: str
     citations: list[str]
     confidence: float
+    steering_applied: SteeringApplied | None = None
     trace: Trace
 
 
@@ -61,6 +65,7 @@ class AgentRunRequest(BaseModel):
     query: str = Field(min_length=1)
     tools: list[str] | None = None
     run_id: str | None = None
+    steering: SteeringRequest | None = None
 
 
 class AgentRunResponse(BaseModel):
@@ -69,6 +74,7 @@ class AgentRunResponse(BaseModel):
     steps: list[str]
     tool_calls: list[str]
     confidence: float
+    steering_applied: SteeringApplied | None = None
     trace: Trace
 
 

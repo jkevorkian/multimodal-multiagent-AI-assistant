@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Depends, Request
 from uuid import uuid4
 
-from app.contracts.schemas import AgentRunRequest, AgentRunResponse, AgentToolInfo, AgentToolsResponse, Trace
+from fastapi import APIRouter, Depends, Request
+
+from app.contracts.schemas import AgentRunRequest, AgentRunResponse, AgentToolInfo, AgentToolsResponse, SteeringApplied, Trace
 from app.core.config import settings
 from app.core.dependencies import ServiceContainer, get_container
+from app.core.steering import (
+    apply_answer_style,
+    apply_tool_policy,
+    enforce_grounding_policy,
+    resolve_profile,
+)
 
 router = APIRouter(tags=["agents"])
 
@@ -15,8 +22,13 @@ async def run_agents(
     container: ServiceContainer = Depends(get_container),
 ) -> AgentRunResponse:
     run_id = payload.run_id or str(uuid4())
-    # If tools are omitted (or an empty list is provided), enable all registered tools.
-    enabled_tools = payload.tools or container.tool_registry.list_tools()
+    steering_resolution = resolve_profile(payload.steering)
+    available_tools = container.tool_registry.list_tools()
+    enabled_tools, tool_policy_notes = apply_tool_policy(
+        available_tools=available_tools,
+        requested_tools=payload.tools,
+        steering=payload.steering,
+    )
     orchestration_state = await container.orchestrator.run(
         query=payload.query,
         trace={"request_id": request.state.request_id, "trace_id": request.state.trace_id},
@@ -26,12 +38,29 @@ async def run_agents(
         max_steps=settings.agent_max_steps,
         resume_from_checkpoint=settings.agent_resume_from_checkpoint,
     )
+    citations = [
+        f"{item['source']}#chunk-{item['chunk_id']}"
+        for item in orchestration_state.retrieved_context
+        if "source" in item and "chunk_id" in item
+    ]
+    grounded_answer, grounding_notes = enforce_grounding_policy(
+        answer=orchestration_state.final_answer,
+        citations=citations,
+        profile=steering_resolution.profile,
+        steering=payload.steering,
+    )
+    answer = apply_answer_style(grounded_answer, steering_resolution.profile)
+    confidence = orchestration_state.confidence
+    if grounded_answer != orchestration_state.final_answer:
+        confidence = min(confidence, 0.2)
+    steering_notes = [*steering_resolution.notes, *tool_policy_notes, *grounding_notes]
     return AgentRunResponse(
         run_id=run_id,
-        answer=orchestration_state.final_answer,
+        answer=answer,
         steps=orchestration_state.steps,
         tool_calls=orchestration_state.tool_calls,
-        confidence=orchestration_state.confidence,
+        confidence=confidence,
+        steering_applied=SteeringApplied(profile=steering_resolution.profile, notes=steering_notes),
         trace=Trace(request_id=request.state.request_id, trace_id=request.state.trace_id),
     )
 

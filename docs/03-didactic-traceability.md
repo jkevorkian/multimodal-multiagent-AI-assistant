@@ -172,6 +172,7 @@ Composable middleware-style utilities keep resilience logic centralized and test
 - Add explicit steering profiles (`balanced`, `concise`, `strict-grounded`, `creative`) at request/session level.
 - Apply steering to answer style, tool policy, and grounding strictness.
 - Emit steering profile and enforcement notes in traces for observability.
+- Current status (2026-03-08): baseline implemented with route-level steering schema, profile resolution, tool policy application, grounding abstention, and regression tests.
 
 ## M6 - Evaluation + Deploy
 ### How it works

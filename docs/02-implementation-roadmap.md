@@ -411,6 +411,13 @@ Add explicit steering controls so users/operators can shape style, risk posture,
 - Tool and grounding policies are enforced consistently.
 - Default behavior remains backward compatible for existing clients.
 
+### Implementation Status
+- Current branch status (2026-03-08): M5.2 baseline implemented in current working tree.
+- Delivered in this slice:
+  - Steering contracts (`SteeringRequest`, `ToolPolicy`, `GroundingPolicy`) and runtime application helpers.
+  - Query/agent route integration for profile resolution, answer-style shaping, tool policy filtering, and grounding-abstention enforcement.
+  - Regression tests for tool-policy resolution, strict-grounded abstention, creative style, and route-level steering metadata.
+
 ## M5.3 - Multimodal Embedding Stack (Qwen3-VL + Multivector DB)
 ### Objective
 Store and retrieve text, image, screenshot, and video evidence in a shared multimodal vector space, then rerank with cross-modal precision.

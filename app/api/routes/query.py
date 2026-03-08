@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Request
 
-from app.contracts.schemas import QueryRequest, QueryResponse, Trace
+from app.contracts.schemas import QueryRequest, QueryResponse, SteeringApplied, Trace
+from app.core.steering import apply_answer_style, enforce_grounding_policy, resolve_profile
 from app.core.dependencies import ServiceContainer, get_container
 
 router = APIRouter(tags=["query"])
@@ -48,6 +49,7 @@ async def query(
     request: Request,
     container: ServiceContainer = Depends(get_container),
 ) -> QueryResponse:
+    steering_resolution = resolve_profile(payload.steering)
     try:
         context = await container.retriever.retrieve(payload.query, payload.top_k)
     except Exception:
@@ -67,6 +69,13 @@ async def query(
     if not answer.strip():
         answer = _fallback_answer_from_snippets(snippets)
     citations = [f"{item['source']}#chunk-{item['chunk_id']}" for item in context]
+    answer, grounding_notes = enforce_grounding_policy(
+        answer=answer,
+        citations=citations,
+        profile=steering_resolution.profile,
+        steering=payload.steering,
+    )
+    answer = apply_answer_style(answer, steering_resolution.profile)
     confidence = round(min(0.95, 0.35 + (0.12 * len(citations))), 2) if citations else 0.15
     if (
         "rate-limited or out of quota" in answer
@@ -75,9 +84,12 @@ async def query(
         or "returned an empty response" in answer
     ):
         confidence = min(confidence, 0.2)
+    steering_notes = [*steering_resolution.notes, *grounding_notes]
+    steering_applied = SteeringApplied(profile=steering_resolution.profile, notes=steering_notes)
     return QueryResponse(
         answer=answer,
         citations=citations,
         confidence=confidence,
+        steering_applied=steering_applied,
         trace=Trace(request_id=request.state.request_id, trace_id=request.state.trace_id),
     )

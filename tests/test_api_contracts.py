@@ -67,6 +67,7 @@ def test_query_contract() -> None:
     assert "answer" in payload
     assert "citations" in payload
     assert "confidence" in payload
+    assert "steering_applied" in payload
     assert "trace" in payload
 
 
@@ -77,6 +78,7 @@ def test_agents_contract() -> None:
     assert "run_id" in payload
     assert "steps" in payload
     assert "tool_calls" in payload
+    assert "steering_applied" in payload
     assert "trace" in payload
 
 

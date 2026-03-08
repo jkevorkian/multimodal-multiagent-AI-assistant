@@ -594,17 +594,32 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: regression guard for token-budget compaction behavior.
 - Technical/practical role: validates threshold trigger, pinned-context invariants, and runtime event emission for compaction.
 
-## 11. M5.2 - Steering and Policy Controls (Planned)
+## 11. M5.2 - Steering and Policy Controls
 
 `app/core/steering.py`
-- Milestone metadata: introduced `M5.2`; status `planned`.
+- Milestone metadata: introduced `M5.2`; status `implemented`.
 - Theoretical role: policy-control boundary for response/tool behavior.
 - Technical/practical role: applies steering profiles for style, grounding, and tool policy.
 
 `app/contracts/steering.py`
-- Milestone metadata: introduced `M5.2`; status `planned`.
+- Milestone metadata: introduced `M5.2`; status `implemented`.
 - Theoretical role: steering request/trace schema boundary.
 - Technical/practical role: defines steering profile model and enforcement metadata.
+
+`app/api/routes/query.py`
+- Milestone metadata: introduced `M0`; updated `M5.2`; status `implemented`.
+- Theoretical role change: query boundary now applies policy controls in addition to retrieval/answer composition.
+- Technical/practical change: resolves steering profile and enforces style + grounding policies (`strict-grounded` abstention, concise/creative shaping).
+
+`app/api/routes/agents.py`
+- Milestone metadata: introduced `M0`; updated `M5.2`; status `implemented`.
+- Theoretical role change: agent run boundary now applies tool/grounding policy controls.
+- Technical/practical change: applies allow/deny/require tool policy, answer style shaping, grounding checks, and returns steering metadata.
+
+`tests/test_m52_steering.py`
+- Milestone metadata: introduced `M5.2`; status `implemented`.
+- Theoretical role: regression guard for steering policy behavior.
+- Technical/practical role: validates tool policy resolution, strict-grounded abstention, creative style shaping, and route-level steering metadata.
 
 ## 12. M6 - Evaluation and Deployment (Planned)
 
