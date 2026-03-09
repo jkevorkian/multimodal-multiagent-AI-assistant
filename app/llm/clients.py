@@ -58,12 +58,7 @@ class OpenAILLMClient:
                 {"role": "user", "content": user_prompt},
             ],
         )
-        content = response.choices[0].message.content
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return content.strip()
-        return str(content).strip()
+        return self._extract_text(response)
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -75,6 +70,49 @@ class OpenAILLMClient:
         # Some OpenAI-compatible local servers do not enforce API keys.
         self._client = AsyncOpenAI(api_key=self._api_key or "local-placeholder-key", base_url=self._base_url)
         return self._client
+
+    @staticmethod
+    def _extract_text(response: Any) -> str:
+        try:
+            message = response.choices[0].message
+        except Exception:
+            return ""
+
+        text = OpenAILLMClient._normalize_message_field(getattr(message, "content", None))
+        if text:
+            return text
+
+        # Some OpenAI-compatible local providers (for example Qwen derivatives)
+        # can place textual output in `reasoning` when `content` is empty.
+        reasoning = OpenAILLMClient._normalize_message_field(getattr(message, "reasoning", None))
+        if reasoning:
+            return reasoning
+        return ""
+
+    @staticmethod
+    def _normalize_message_field(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if isinstance(item, dict):
+                    text_candidate = str(item.get("text", "")).strip()
+                    if text_candidate:
+                        parts.append(text_candidate)
+                    continue
+                text = str(getattr(item, "text", item)).strip()
+                if text:
+                    parts.append(text)
+            return " ".join(parts).strip()
+        return str(value).strip()
 
 
 def build_llm_client(

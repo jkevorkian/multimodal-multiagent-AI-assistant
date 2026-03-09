@@ -154,6 +154,8 @@ Add explicit role-based orchestration and tool routing with durable execution an
 
 ### Implementation Status
 - Current branch status (2026-03-04): implemented and test-covered, with LangGraph orchestration and provider-backed LLM wiring.
+- Current branch status (2026-03-09): built-in operational tools are implemented and wired into runtime (`stub_tool`, `rag_debug`, `filesystem`, `system_metrics`, plus network-enabled `web_search` and `url_fetch` when external calls are allowed). Tool selection now maps query intent to relevant capabilities instead of broad keyword matching.
+- Current branch status (2026-03-09): tool-input hardening is implemented for chat-composed queries; research stage now extracts effective user intent for tool payloads, `web_search` has provider fallback (Wikipedia -> DuckDuckGo), and `rag_debug` degrades gracefully when indexed-source listing is slow.
 
 ## M2.2 - Streamlit Frontend + Architecture Visualization
 ### Objective
@@ -253,7 +255,7 @@ Turn chat from a frontend-only interaction into a durable backend feature with r
   - updates to `app/core/event_bus.py` and runtime event metadata shaping for transcript details
   - updates to `frontend/streamlit_app.py` chat workspace and transcript panel
 - Endpoints:
-  - `POST /chat/sessions`, `GET /chat/sessions`, `GET/PATCH /chat/sessions/{chat_id}`
+  - `POST /chat/sessions`, `GET /chat/sessions`, `GET/PATCH/DELETE /chat/sessions/{chat_id}`
   - `POST/GET /chat/sessions/{chat_id}/messages`
   - `POST /chat/sessions/{chat_id}/files`
   - `GET /chat/sessions/{chat_id}/runs/{run_id}/events`
@@ -297,6 +299,12 @@ Turn chat from a frontend-only interaction into a durable backend feature with r
   - runtime transcript enrichment (retrieval preview, analysis trace, answer preview, tool/error details).
   - Streamlit Chat tab migrated from session-local state to backend-persisted multi-chat workflow.
   - regression tests for session persistence, chat-scoped retrieval isolation, and transcript event detail payloads.
+- Current branch status (2026-03-09): chat memory layering is implemented and test-covered.
+- Delivered in this slice:
+  - layered memory composition in chat routes: recent turns + compact summary memory + semantic recall over old messages.
+  - persistent per-chat summary memory store (`chat_memory` table) with lifecycle cleanup on chat deletion.
+  - memory indexing controls and budgets via config/env (`MMAA_CHAT_MEMORY_*`).
+  - regression tests for summary compaction, long-horizon fact recall, and memory cleanup on session deletion.
 
 ## M3 - Image Multimodal Path
 ### Objective
@@ -531,7 +539,7 @@ Store and retrieve text, image, screenshot, and video evidence in a shared multi
   - Added multimodal embedding abstraction (`app/interfaces/multimodal_embedding.py`) and provider builder (`app/rag/multimodal_embeddings.py`) with deterministic fallback plus true VL provider wiring (`qwen3_vl`) for image/video-aware embedding payloads.
   - Reworked ingest/retrieval path to write/query dual dense vectors (`text_dense`, `mm_dense`) through named-vector-capable stores while preserving backward-compatible fallback behavior.
   - Added true VL reranker provider path (`qwen3_vl`) for multimodal query-document reranking, plus OpenAI-compatible LLM reranker fallback profile.
-  - Updated video ingestion policy to favor direct VL embeddings first; frame/timeline analysis is now optional enrichment (`MMAA_MULTIMODAL_VIDEO_INGEST_ENRICH_WITH_ANALYSIS`).
+  - Updated video ingestion policy to favor direct VL embeddings first while indexing timestamped visual event chunks when enabled (`MMAA_MULTIMODAL_VIDEO_INGEST_ENRICH_WITH_ANALYSIS`) for retrieval-grounded appearance/event QA.
   - Added optional local video-audio transcription during ingestion (Whisper + ffmpeg) so spoken content is indexed as timestamped retrieval evidence (`MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_*`).
   - Extended Qdrant adapter with named vector upsert/search routing and collection bootstrap support for text+multimodal vector fields.
   - Added M5.3 regression suites (`tests/test_m53_multimodal_stack.py`, `tests/test_m53_openai_reranker.py`) covering ingest/search parity, cross-modal retrieval, reranker lift, named-vector routing, and OpenAI-compatible reranker behavior.

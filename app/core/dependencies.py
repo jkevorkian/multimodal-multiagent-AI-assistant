@@ -39,15 +39,7 @@ from app.rag import (
     build_reranker,
 )
 from app.storage import FallbackVectorStore, PgVectorStore, QdrantVectorStore, SQLiteChatStore
-from app.tools import ToolRegistry
-
-
-class StubTool:
-    name = "stub_tool"
-    description = "Demo placeholder tool that echoes request metadata."
-
-    async def run(self, payload: dict) -> dict:
-        return {"status": "ok", "payload": payload}
+from app.tools import ToolRegistry, build_default_tools
 
 
 @dataclass
@@ -237,7 +229,16 @@ def _build_service_container_internal(
         multimodal_vector_name=settings.rag_multimodal_vector_name,
         use_text_dense_branch=settings.rag_multimodal_fuse_text_dense,
     )
-    tools: list[Tool] = [StubTool()]
+    tools: list[Tool] = build_default_tools(
+        retriever=retriever,
+        vector_store=vector_store,
+        workspace_root=Path.cwd(),
+        enable_network_tools=not disable_external_api,
+        vision_client=multimodal_selection.vision,
+        video_client=multimodal_selection.video,
+        video_probe_sample_fps=settings.multimodal_video_sample_fps,
+        video_probe_max_frames=settings.multimodal_video_max_frames,
+    )
     tool_registry = ToolRegistry(tools)
     event_bus = InMemoryEventBus() if disable_external_api else get_event_bus()
     research_agent = ResearchAgent(
@@ -246,6 +247,7 @@ def _build_service_container_internal(
         retrieval_top_k=settings.agent_retrieval_top_k,
         tool_timeout_sec=settings.agent_tool_timeout_sec,
         tool_retries=settings.agent_tool_retries,
+        max_tools_per_pass=settings.agent_max_tools_per_research_pass,
         event_bus=event_bus,
     )
     checkpoint_store = InMemoryCheckpointStore() if settings.agent_checkpoint_enabled else NullCheckpointStore()
@@ -272,7 +274,9 @@ def _build_service_container_internal(
         answer_agent=answer_agent,
         checkpoint_store=checkpoint_store,
         max_steps=settings.agent_max_steps,
+        max_revision_iterations=settings.agent_max_revision_iterations,
         event_bus=event_bus,
+        run_timeout_sec=settings.agent_run_timeout_sec,
         context_manager=context_manager,
     )
 

@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     rag_text_vector_name: str = "text_dense"
     rag_multimodal_vector_name: str = "mm_dense"
     rag_multimodal_fuse_text_dense: bool = True
-    rag_chunk_size: int = 2500
+    rag_chunk_size: int = 1500
     rag_chunk_overlap: int = 120
     rag_max_source_bytes: int = 2_000_000
 
@@ -116,16 +116,27 @@ class Settings(BaseSettings):
     vision_max_source_bytes: int = 5_000_000
 
     # Agent orchestration guardrails.
-    agent_max_steps: int = 6
-    agent_tool_budget: int = 2
-    agent_tool_timeout_sec: float = 2.0
+    agent_max_steps: int = 8
+    agent_tool_budget: int = 4
+    agent_tool_timeout_sec: float = 4.0
     agent_tool_retries: int = 1
+    agent_max_tools_per_research_pass: int = 2
+    agent_max_revision_iterations: int = 0
+    agent_run_timeout_sec: float = 45.0
     agent_retrieval_top_k: int = 5
     agent_checkpoint_enabled: bool = True
     agent_resume_from_checkpoint: bool = True
     context_compaction_enabled: bool = True
     context_compaction_token_threshold: int = 1500
     context_compaction_target_token_threshold: int = 750
+
+    # Chat memory layering (recent turns + compact summary + semantic retrieval).
+    chat_memory_recent_turns: int = 8
+    chat_memory_history_limit: int = 120
+    chat_memory_summary_max_chars: int = 2400
+    chat_memory_semantic_top_k: int = 4
+    chat_memory_indexing_enabled: bool = True
+
     chat_store_path: str = "data/chat_store.db"
 
     model_config = SettingsConfigDict(

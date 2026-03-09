@@ -46,5 +46,18 @@ def test_chat_sessions_persist_messages_and_can_be_continued(tmp_path: Path) -> 
         assert len(payload["messages"]) >= 4
         assert any(item.get("role") == "assistant" for item in payload["messages"])
         assert payload["files"]
+        assert container.chat_store.get_memory(chat_id) is not None
+
+        deleted = client.delete(f"/chat/sessions/{chat_id}")
+        assert deleted.status_code == 200
+        deleted_payload = deleted.json()
+        assert deleted_payload["chat_id"] == chat_id
+        assert deleted_payload["status"] == "deleted"
+        assert deleted_payload["deleted_messages"] >= 1
+        assert deleted_payload["deleted_memory"] >= 1
+        assert container.chat_store.get_memory(chat_id) is None
+
+        missing_history = client.get(f"/chat/sessions/{chat_id}/messages")
+        assert missing_history.status_code == 404
     finally:
         app.dependency_overrides.clear()

@@ -73,7 +73,7 @@ def test_sse_events_are_ordered_and_replayable() -> None:
     assert all(int(item["sequence_number"]) > pivot for item in replay_events)
 
 
-def test_revision_event_is_emitted_when_evidence_is_insufficient() -> None:
+def test_revision_event_is_not_emitted_for_plain_insufficient_evidence_by_default() -> None:
     container = create_test_container()
     app.dependency_overrides[get_container] = lambda: container
     run_id = f"run-{uuid4().hex}"
@@ -87,7 +87,7 @@ def test_revision_event_is_emitted_when_evidence_is_insufficient() -> None:
         events_response = client.get(f"/runs/{run_id}/events", params={"follow": "false"})
         assert events_response.status_code == 200
         all_events = _parse_sse_events(events_response.text)
-        assert any(item.get("event_type") == "agent.revision.requested" for item in all_events)
+        assert all(item.get("event_type") != "agent.revision.requested" for item in all_events)
     finally:
         app.dependency_overrides.clear()
 

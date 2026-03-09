@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.llm.clients import build_llm_client
+from app.llm.clients import OpenAILLMClient, build_llm_client
 from app.multimodal.clients import OpenAIVisionClient, build_multimodal_clients
 from app.rag.embeddings import build_embedding_client
 from app.rag.ingestion import DocumentIngestionService
@@ -125,6 +125,63 @@ def test_openai_compatible_endpoints_can_use_base_url_without_api_key() -> None:
     )
     assert multimodal_selection.provider_name == "openai+heuristic-video"
     assert getattr(multimodal_selection.vision, "_base_url", None) == "http://localhost:11434/v1"
+
+
+def test_openai_llm_client_uses_reasoning_when_content_is_empty(monkeypatch) -> None:
+    class _Response:
+        class _Choice:
+            class _Message:
+                content = ""
+                reasoning = "me gustan los tacos"
+
+            message = _Message()
+
+        choices = [_Choice()]
+
+    class _Completions:
+        async def create(self, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    client = OpenAILLMClient(model="qwen3:4b", base_url="http://localhost:11434/v1")
+    monkeypatch.setattr(client, "_get_client", lambda: _Client())
+
+    answer = asyncio.run(client.generate("What is said?", ["Audio event: me gustan los tacos"]))
+    assert "tacos" in answer.lower()
+
+
+def test_openai_llm_client_extracts_list_content_payload(monkeypatch) -> None:
+    class _Response:
+        class _Choice:
+            class _Message:
+                content = [{"type": "text", "text": "Answer:"}, {"type": "text", "text": " tacos"}]
+                reasoning = ""
+
+            message = _Message()
+
+        choices = [_Choice()]
+
+    class _Completions:
+        async def create(self, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    client = OpenAILLMClient(model="qwen3:4b", base_url="http://localhost:11434/v1")
+    monkeypatch.setattr(client, "_get_client", lambda: _Client())
+
+    answer = asyncio.run(client.generate("What is said?", ["Audio event: me gustan los tacos"]))
+    assert "answer" in answer.lower()
+    assert "tacos" in answer.lower()
 
 
 def test_openai_embedding_provider_requires_api_key_or_base_url() -> None:
@@ -273,8 +330,10 @@ def test_image_and_video_are_ingested_with_modality_metadata(monkeypatch, tmp_pa
     assert any(row["metadata"].get("modality") == "image" for row in store.rows)
     assert any(row["metadata"].get("modality") == "video" for row in store.rows)
     assert any("vision-summary" in row["metadata"].get("snippet", "") for row in store.rows)
-    assert any("Key events:" in row["metadata"].get("snippet", "") for row in store.rows)
-    assert any("[t=" in row["metadata"].get("snippet", "") for row in store.rows)
+    video_rows = [row for row in store.rows if row["metadata"].get("modality") == "video"]
+    assert any("Visual event:" in str(row["metadata"].get("snippet", "")) for row in video_rows)
+    assert any(row["metadata"].get("timestamp_sec") is not None for row in video_rows)
+    assert any(row["metadata"].get("frame_index") is not None for row in video_rows)
 
 
 def test_video_ingestion_can_include_audio_transcript_text(monkeypatch, tmp_path) -> None:

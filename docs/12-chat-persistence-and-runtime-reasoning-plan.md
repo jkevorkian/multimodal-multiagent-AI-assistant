@@ -9,7 +9,9 @@ Define a production-style chat architecture for this project so chat is not a UI
 
 Research baseline date: 2026-03-08.
 
-Current implementation status (2026-03-08): core M2.4 scope is implemented in the repository (durable chat sessions, chat-scoped retrieval metadata filters, transcript-enriched runtime events, and frontend persistent chat integration).
+Current implementation status:
+- 2026-03-08: core M2.4 scope implemented (durable chat sessions, chat-scoped retrieval metadata filters, transcript-enriched runtime events, and frontend persistent chat integration).
+- 2026-03-09: layered chat memory implemented (recent-turn window + compact summary memory + semantic recall over historical chat messages).
 
 ## 2. Industry Findings (Primary Sources)
 
@@ -47,10 +49,10 @@ Implication for this repo:
 - Our event contract should reserve fields for `reasoning_text` deltas and `evidence` blocks now, even if some providers do not emit both.
 
 ## 3. Gap Analysis vs Current Repo
-- Current Chat tab is frontend-session based only (not durable across restarts/sessions).
-- Files ingested in chat are not scoped or saved as chat-owned assets.
-- Runtime status box is live but collapses history and does not render a per-step transcript with retrieved evidence payload.
-- Retrieval path has no metadata-filter contract for `chat_id`.
+- Core persistence and scoping gaps from the original plan are closed (sessions/messages/files/runs are durable and retrieval is chat-scoped by default).
+- Live runtime transcript is implemented and scrollable with step/evidence/tool details.
+- Remaining gap for future iteration: embedding cleanup by metadata when deleting chats (currently mitigated by strict chat-scoped retrieval filters and DB-level chat-memory deletion).
+- Remaining gap for future iteration: optional long-term memory quality tuning (summary compression policy and semantic recall scoring) under heavy chat workloads.
 
 ## 4. Target Architecture
 
@@ -73,6 +75,7 @@ Storage approach:
 - `GET /chat/sessions`
 - `GET /chat/sessions/{chat_id}`
 - `PATCH /chat/sessions/{chat_id}`
+- `DELETE /chat/sessions/{chat_id}`
 - `POST /chat/sessions/{chat_id}/messages`
 - `GET /chat/sessions/{chat_id}/messages`
 - `POST /chat/sessions/{chat_id}/files`
@@ -166,6 +169,23 @@ Event metadata normalization:
   - `tests/test_m24_chat_sessions.py`
   - `tests/test_m24_chat_scoped_retrieval.py`
   - `tests/test_m24_runtime_transcript.py`
+
+## 5.2 Delivered Status (2026-03-09)
+- Layered memory composition in chat message routing:
+  - recent turns for short-horizon coherence,
+  - compact persisted summary for older context continuity,
+  - semantic retrieval over prior chat messages for long-horizon recall.
+- New configuration knobs for memory behavior:
+  - `MMAA_CHAT_MEMORY_RECENT_TURNS`
+  - `MMAA_CHAT_MEMORY_HISTORY_LIMIT`
+  - `MMAA_CHAT_MEMORY_SUMMARY_MAX_CHARS`
+  - `MMAA_CHAT_MEMORY_SEMANTIC_TOP_K`
+  - `MMAA_CHAT_MEMORY_INDEXING_ENABLED`
+- Chat-delete lifecycle now removes persisted summary memory rows.
+- Regression tests added for:
+  - summary compaction persistence,
+  - recall of older facts after many turns,
+  - delete-path memory cleanup assertion.
 
 ## 6. Key Design Rules
 - Do not leak data across chats by default.

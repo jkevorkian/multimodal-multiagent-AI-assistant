@@ -80,6 +80,15 @@ class SQLiteChatStore:
                     );
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS chat_memory (
+                        chat_id TEXT PRIMARY KEY,
+                        summary_text TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL
+                    );
+                    """
+                )
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, created_at);")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_files_chat_id ON chat_files(chat_id, created_at);")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_runs_chat_id ON chat_runs(chat_id, updated_at);")
@@ -165,6 +174,84 @@ class SQLiteChatStore:
                 )
                 connection.commit()
         return self.get_session(chat_id)
+
+    def delete_session(self, chat_id: str) -> dict[str, Any] | None:
+        current = self.get_session(chat_id)
+        if current is None:
+            return None
+
+        with self._lock:
+            with self._connect() as connection:
+                message_count_row = connection.execute(
+                    "SELECT COUNT(1) AS count FROM chat_messages WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
+                file_count_row = connection.execute(
+                    "SELECT COUNT(1) AS count FROM chat_files WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
+                run_count_row = connection.execute(
+                    "SELECT COUNT(1) AS count FROM chat_runs WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
+                memory_count_row = connection.execute(
+                    "SELECT COUNT(1) AS count FROM chat_memory WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
+
+                deleted_messages = int(message_count_row["count"]) if message_count_row else 0
+                deleted_files = int(file_count_row["count"]) if file_count_row else 0
+                deleted_runs = int(run_count_row["count"]) if run_count_row else 0
+                deleted_memory = int(memory_count_row["count"]) if memory_count_row else 0
+
+                connection.execute("DELETE FROM chat_runs WHERE chat_id = ?", (chat_id,))
+                connection.execute("DELETE FROM chat_files WHERE chat_id = ?", (chat_id,))
+                connection.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
+                connection.execute("DELETE FROM chat_memory WHERE chat_id = ?", (chat_id,))
+                connection.execute("DELETE FROM chat_sessions WHERE chat_id = ?", (chat_id,))
+                connection.commit()
+
+        return {
+            "chat_id": chat_id,
+            "deleted_messages": deleted_messages,
+            "deleted_files": deleted_files,
+            "deleted_runs": deleted_runs,
+            "deleted_memory": deleted_memory,
+        }
+
+    def get_memory(self, chat_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT chat_id, summary_text, updated_at
+                    FROM chat_memory
+                    WHERE chat_id = ?
+                    """,
+                    (chat_id,),
+                ).fetchone()
+        return self._row_to_memory(row) if row else None
+
+    def upsert_memory(self, *, chat_id: str, summary_text: str) -> dict[str, Any]:
+        now = _utc_now_iso()
+        normalized_summary = summary_text.strip()
+        with self._lock:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO chat_memory(chat_id, summary_text, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(chat_id) DO UPDATE SET
+                        summary_text=excluded.summary_text,
+                        updated_at=excluded.updated_at
+                    """,
+                    (chat_id, normalized_summary, now),
+                )
+                connection.commit()
+        memory = self.get_memory(chat_id)
+        if memory is None:
+            return {"chat_id": chat_id, "summary_text": normalized_summary, "updated_at": now}
+        return memory
 
     def touch_session(self, chat_id: str) -> None:
         now = _utc_now_iso()
@@ -360,4 +447,12 @@ class SQLiteChatStore:
             "source_type": str(row["source_type"]),
             "metadata": json.loads(str(row["metadata_json"] or "{}")),
             "created_at": str(row["created_at"]),
+        }
+
+    @staticmethod
+    def _row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "chat_id": str(row["chat_id"]),
+            "summary_text": str(row["summary_text"] or ""),
+            "updated_at": str(row["updated_at"]),
         }

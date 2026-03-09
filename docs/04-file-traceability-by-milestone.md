@@ -320,7 +320,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/agents/research_agent.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: evidence-gathering agent role.
-- Technical/practical role: runs retrieval, selects eligible tools, and executes tool calls under timeout/retry/budget controls.
+- Technical/practical role: runs retrieval, selects eligible tools, extracts effective user intent from composed chat queries for tool calls, and executes tools under timeout/retry/budget controls.
 
 `app/agents/analyst_agent.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
@@ -355,7 +355,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/tools/__init__.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: tools package export boundary.
-- Technical/practical role: re-exports tool registry and MCP adapter.
+- Technical/practical role: re-exports tool registry, MCP adapter, and default built-in tool factory wiring.
+
+`app/tools/builtin.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: concrete tool-capability layer for research-stage augmentation.
+- Technical/practical role: implements built-in runtime tools (`stub_tool`, `rag_debug`, `filesystem`, `system_metrics`, `web_search`, `url_fetch`) with query sanitization/fallback behavior (`web_search`) and timeout-tolerant debug retrieval (`rag_debug`), plus default tool bundle composition.
 
 `app/tools/registry.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
@@ -370,7 +375,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `tests/test_m2_agents.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
 - Theoretical role: behavior regression suite for orchestration mechanics.
-- Technical/practical role: validates stage transitions, tool selection scenario, and timeout/retry behavior.
+- Technical/practical role: validates stage transitions, tool selection scenarios (including default intent fallback), timeout/retry behavior, and effective user-intent extraction for tool payloads.
+
+`tests/test_tools_builtin.py`
+- Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
+- Theoretical role: unit regression suite for concrete tool implementations.
+- Technical/practical role: validates default tool bundle composition, filesystem workspace isolation, retrieval-debug payload shaping (including graceful timeout), metrics output contract, and web-search query/fallback behavior.
 
 `tests/test_m2_checkpoint_resume.py`
 - Milestone metadata: introduced `M2`; updated `M2`; status `implemented`.
@@ -385,7 +395,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/core/dependencies.py`
 - Milestone metadata: introduced `M0`; updated `M4.1`; status `implemented`.
 - Theoretical role change: expands service composition beyond orchestration into LLM/multimodal provider selection.
-- Technical/practical change: wires tool registry, role agents, checkpoint store, LangGraph orchestrator runtime, provider-based LLM selection, and multimodal clients.
+- Technical/practical change: wires default tool bundle + registry, role agents, checkpoint store, LangGraph orchestrator runtime, provider-based LLM selection, and multimodal clients.
 
 `app/core/config.py`
 - Milestone metadata: introduced `M0`; updated `M4`; status `implemented`.
@@ -466,17 +476,17 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `app/contracts/chat.py`
 - Milestone metadata: introduced `M2.4`; status `implemented`.
 - Theoretical role: durable conversation contract boundary.
-- Technical/practical role: defines chat session/message/file/run schemas for API validation.
+- Technical/practical role: defines chat session/message/file/run schemas for API validation, including chat-delete lifecycle counters.
 
 `app/storage/chat_store.py`
 - Milestone metadata: introduced `M2.4`; status `implemented`.
 - Theoretical role: persistence boundary for chat lifecycle entities.
-- Technical/practical role: stores/retrieves chats, messages, files, and run links (SQLite-first local implementation).
+- Technical/practical role: stores/retrieves chats, messages, files, run links, and compact chat memory summaries (SQLite-first local implementation).
 
 `app/api/routes/chat.py`
 - Milestone metadata: introduced `M2.4`; status `implemented`.
 - Theoretical role: chat-session API boundary.
-- Technical/practical role: exposes CRUD-like chat/session/message/file endpoints and run transcript retrieval.
+- Technical/practical role: exposes CRUD-like chat/session/message/file endpoints, layered memory composition (recent turns + compact summary + semantic recall), and run transcript retrieval.
 
 `app/interfaces/vector_store.py`
 - Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
@@ -516,7 +526,12 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 `tests/test_m24_chat_sessions.py`
 - Milestone metadata: introduced `M2.4`; status `implemented`.
 - Theoretical role: persistence regression guard for chat lifecycle operations.
-- Technical/practical role: validates create/list/reopen/continue flows and data durability across app restarts.
+- Technical/practical role: validates create/list/reopen/continue flows, chat-delete cleanup, and data durability across app restarts.
+
+`tests/test_m24_chat_memory.py`
+- Milestone metadata: introduced `M2.4`; status `implemented`.
+- Theoretical role: long-horizon memory regression guard for chat coherence.
+- Technical/practical role: validates compact summary persistence and semantic recall of older facts beyond the recent-turn window.
 
 `tests/test_m24_chat_scoped_retrieval.py`
 - Milestone metadata: introduced `M2.4`; status `implemented`.

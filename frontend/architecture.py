@@ -4,7 +4,7 @@ from __future__ import annotations
 def build_architecture_dot() -> str:
     return """
 digraph MMAA {
-    graph [rankdir=LR, fontsize=10, fontname="Helvetica", labelloc="t", label="Multimodal Multi-Agent Assistant - High-Level Architecture"];
+    graph [rankdir=LR, fontsize=10, fontname="Helvetica", labelloc="t", label="Multimodal Multi-Agent Assistant - Current Runtime Architecture"];
     node [shape=box, style="rounded,filled", color="#2D3748", fillcolor="#EDF2F7", fontname="Helvetica", fontsize=10];
     edge [color="#4A5568", arrowsize=0.7, fontname="Helvetica", fontsize=9];
 
@@ -13,13 +13,14 @@ digraph MMAA {
     api [label="FastAPI Backend\\n/api routes"];
 
     subgraph cluster_agents {
-        label="Agentic Orchestration (M2)";
+        label="Agentic Orchestration (M2-M5)";
         color="#CBD5E0";
         orchestrator [label="AgentOrchestrator"];
         research [label="ResearchAgent"];
         analyst [label="AnalystAgent"];
         answer [label="AnswerAgent"];
-        registry [label="ToolRegistry"];
+        registry [label="ToolRegistry\\n(stub/rag/web/url/fs/metrics)"];
+        media_probe_tools [label="Media Clarification Tools\\nvision_probe + video_probe"];
         tool_catalog [label="/agents/tools\\n(tool discovery)"];
         checkpoint [label="CheckpointStore"];
     }
@@ -46,14 +47,15 @@ digraph MMAA {
         vision [label="/vision/analyze"];
         video [label="/video/analyze"];
         ingest_sources [label="/ingest/sources"];
-        mm_clients [label="Multimodal Clients\\n(OpenAI vision / heuristic fallback)"];
+        mm_clients [label="Multimodal Clients\\n(OpenAI/Qwen/heuristic fallback)"];
     }
 
     subgraph cluster_runtime {
-        label="Runtime Controls (M5 planned)";
+        label="Runtime Controls (Active)";
         color="#CBD5E0";
         context_compactor [label="ContextCompactor\\n(Codex-style compaction)"];
         steering [label="SteeringPolicy\\n(style/risk/tool constraints)"];
+        run_events [label="Run Event Bus + SSE\\n/runs/{run_id}/events"];
     }
 
     subgraph cluster_llm {
@@ -86,7 +88,9 @@ digraph MMAA {
     orchestrator -> answer;
     research -> retriever;
     research -> registry;
+    research -> media_probe_tools [style=dashed, label="retrieval-aware tool payload"];
     tool_catalog -> registry;
+    registry -> media_probe_tools [style=dashed];
     orchestrator -> checkpoint;
     answer -> llm_select;
     llm_select -> llm_provider;
@@ -101,10 +105,13 @@ digraph MMAA {
     video_adapter -> frame_vlm;
     video_adapter -> temporal_agg;
     frame_vlm -> temporal_agg;
+    media_probe_tools -> vision_adapter [style=dashed];
+    media_probe_tools -> video_adapter [style=dashed];
 
     orchestrator -> context_compactor [style=dashed];
     answer -> steering [style=dashed];
     research -> steering [style=dashed];
+    orchestrator -> run_events [style=dashed];
 
     api -> observability;
 }
@@ -119,13 +126,13 @@ def build_agents_pipeline_dot(executed_steps: list[str] | None = None, tool_call
     analyst_fill = "#C6F6D5" if "analyst_agent" in executed else "#EDF2F7"
     answer_fill = "#C6F6D5" if "answer_agent" in executed else "#EDF2F7"
     tools_fill = "#FEEBC8" if tools_called else "#EDF2F7"
-    tools_label = "ToolRegistry\\n(optional tool execution)"
+    tools_label = "ToolRegistry\\n(optional tool execution incl. media probes)"
     if tools_called:
         tools_label = f"ToolRegistry\\ncalled={len(tools_called)}"
 
     return f"""
 digraph AgentPipeline {{
-    graph [rankdir=LR, fontsize=10, fontname="Helvetica", labelloc="t", label="Agent Pipeline (runtime view)"];
+    graph [rankdir=LR, fontsize=10, fontname="Helvetica", labelloc="t", label="Agent Pipeline (current runtime view)"];
     node [shape=box, style="rounded,filled", color="#2D3748", fillcolor="#EDF2F7", fontname="Helvetica", fontsize=10];
     edge [color="#4A5568", arrowsize=0.7, fontname="Helvetica", fontsize=9];
 
@@ -141,7 +148,7 @@ digraph AgentPipeline {{
     research -> analyst;
     analyst -> answer;
     answer -> end;
-    research -> tools [style=dashed, label="tool_budget + allowed_tools"];
+    research -> tools [style=dashed, label="tool_budget + allowed_tools + retrieved_context hints"];
 }}
 """
 
@@ -149,7 +156,7 @@ digraph AgentPipeline {{
 def build_agents_revision_loop_dot() -> str:
     return """
 digraph AgentRevisionLoop {
-    graph [rankdir=LR, fontsize=10, fontname="Helvetica", labelloc="t", label="Agent Revision Loop (M2.3 planned)"];
+    graph [rankdir=LR, fontsize=10, fontname="Helvetica", labelloc="t", label="Agent Guardrail + Revision Flow (implemented telemetry, bounded revisions)"];
     node [shape=box, style="rounded,filled", color="#2D3748", fillcolor="#EDF2F7", fontname="Helvetica", fontsize=10];
     edge [color="#4A5568", arrowsize=0.7, fontname="Helvetica", fontsize=9];
 
@@ -159,7 +166,7 @@ digraph AgentRevisionLoop {
 
     planner [label="Planner / Research\\nselect next action"];
     executor [label="Executor\\nrun reasoning/tool step"];
-    tools [label="Tool Layer\\n(optional; bounded)"];
+    tools [label="Tool Layer\\n(optional; bounded incl. media probes)"];
     critic [label="Critic / Verifier\\ncheck evidence + policy + quality"];
     answer [label="Answer Composer\\nfinal grounded response"];
     router [shape=diamond, label="Revision Gate\\napprove? / revise?"];
@@ -198,7 +205,7 @@ def agent_pipeline_state_rows() -> list[dict[str, str]]:
             "stage": "research_agent",
             "inputs": "query, allowed_tools, tool_budget",
             "state_updates": "steps, retrieved_context, tool_outputs, tool_calls, errors",
-            "logic": "retrieves top-k evidence, then optionally calls selected tools",
+            "logic": "retrieves top-k evidence, builds retrieval-aware tool payload, then optionally calls selected tools",
         },
         {
             "stage": "analyst_agent",
@@ -292,12 +299,13 @@ def high_level_flow_points() -> list[str]:
         "Indexed Sources path: /ingest/sources summarizes what is currently stored in the vector layer.",
         "Agent path: LangGraph orchestrator executes research, analysis, and answer stages with bounded tools.",
         "Tool calls are routed through the registry with timeout/retry controls; /agents/tools exposes discoverable tool names/descriptions.",
+        "Media clarification tools can re-analyze retrieved image/video sources at runtime with query-specific prompts (vision_probe/video_probe).",
         "LLM path uses provider selection: OpenAI when configured, grounded heuristic fallback otherwise.",
         "Vision path runs preprocess -> adapter -> fusion so findings carry explicit evidence tags; webpage URLs can be resolved to concrete image assets.",
         "Video path (M4.1) runs strict sampled frame decode + per-frame VLM analysis + temporal aggregation for timeline-oriented key events.",
         "M2.3 adds live run-status telemetry (SSE/event stream) so users can see step-by-step progress across model calls, agent stages, and tools.",
         "Advanced agent flow supports bounded revision loops with explicit exit guardrails (max steps, max tool calls, stagnation, timeout).",
-        "Runtime hardening roadmap adds context compaction (Codex-style summary checkpoints when context grows) and configurable steering policies.",
+        "Runtime controls include context compaction (Codex-style summary checkpoints when context grows), steering policies, and live event streaming.",
         "Vector storage is adapter-based: external DB (e.g., Qdrant) can coexist with pgvector/in-memory fallback.",
         "Multimodal ingestion can index image/video descriptors into the same retrieval pipeline as text.",
         "Metrics and logs expose operational behavior for debugging and milestone evaluation.",

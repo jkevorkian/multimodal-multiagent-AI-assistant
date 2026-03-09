@@ -16,7 +16,7 @@ Run this project against local or self-hosted OpenAI-compatible endpoints so you
 - Local file image URIs (`file://...`) are converted to `data:` URLs in the vision client for better compatibility with OpenAI-style VLM APIs.
 - Webpage URLs passed to vision preprocessing are resolved to concrete image assets when discoverable (meta tags/image links), then sent as image payloads.
 - Video pipeline (M4.1) uses strict decoded-frame extraction for per-frame VLM analysis (`opencv-python` required) and fails explicitly if decode is unavailable.
-- RAG ingestion is now VL-first for video: it indexes direct `video_url` multimodal embeddings first, with frame analysis as optional enrichment.
+- RAG ingestion is now VL-first for video and supports timestamped evidence indexing: direct `video_url` embeddings plus optional per-event visual/audio chunks for retrieval-grounded video QA.
 - Video ingestion can also append speech transcript evidence (Whisper local ASR) so spoken content becomes retrievable text chunks.
 
 ## 3. Recommended Option for This Laptop (RTX 4070M, 8 GB VRAM)
@@ -102,8 +102,8 @@ MMAA_MULTIMODAL_API_KEY=local-placeholder
 Note: true VL retrieval requires a Qwen3-VL embedding/reranker-serving endpoint (for example vLLM/qwen-vl-embedding server) at `:8001`; Ollama stays useful for LLM generation and vision analysis.
 
 Optional ingestion enrichment toggle:
-- `MMAA_MULTIMODAL_VIDEO_INGEST_ENRICH_WITH_ANALYSIS=false` (default): no frame decode during RAG indexing, relies on direct VL video embeddings.
-- Set `true` to append frame/timeline analysis during ingestion (requires `opencv-python` decode support).
+- `MMAA_MULTIMODAL_VIDEO_INGEST_ENRICH_WITH_ANALYSIS=true` (recommended): index timestamped visual timeline chunks during ingestion (requires `opencv-python` decode support).
+- Set `false` to skip visual event chunking and rely on direct VL video embeddings only.
 - `MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_ENABLED=true`: transcribe local video audio during ingestion and append timestamped transcript lines (requires `whisper` package + `ffmpeg` in `PATH`).
 - `MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_MODEL=tiny` (or `base`, `small`, etc.): local ASR model size/quality tradeoff.
 

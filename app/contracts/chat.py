@@ -35,6 +35,16 @@ class ChatSessionsResponse(BaseModel):
     trace: Trace
 
 
+class ChatSessionDeleteResponse(BaseModel):
+    chat_id: str
+    status: str
+    deleted_messages: int = 0
+    deleted_files: int = 0
+    deleted_runs: int = 0
+    deleted_memory: int = 0
+    trace: Trace
+
+
 class ChatMessage(BaseModel):
     message_id: str
     chat_id: str
