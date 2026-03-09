@@ -17,6 +17,83 @@ Current delivery status (2026-03-09):
 - Video ingestion can index timestamped speech transcript evidence via local Whisper ASR (`MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_*`).
 - Frontend chat workspace now uses backend-persisted sessions and run transcripts.
 
+## Functional Architecture (High-Level)
+```mermaid
+flowchart LR
+    U((User))
+    FE[Streamlit Workspace<br/>chat, ingestion, run timeline]
+    API[FastAPI API Layer<br/>ingest, query, agents, runs, vision, video, chat]
+    OBS[Observability<br/>logs, metrics, SSE run events]
+
+    subgraph CORE[Agent Runtime]
+        ORCH[LangGraph Orchestrator<br/>Research -> Analyst -> Answer]
+        TOOLS[Tool Registry<br/>builtin tools, MCP, media probes]
+        CTRL[Runtime Controls<br/>steering, context compaction, loop guardrails]
+    end
+
+    subgraph KNOW[Knowledge + Retrieval]
+        ING[Ingestion<br/>parse, chunk, normalize]
+        RET[Retrieval + Rerank<br/>dense + lexical + fusion]
+        VDB[(Vector Stores<br/>pgvector / Qdrant / fallback)]
+    end
+
+    subgraph MM[Multimodal]
+        VISION[Vision Path<br/>preprocess, analyze, evidence fusion]
+        VIDEO[Video Path<br/>frame sampling, per-frame VLM, temporal aggregation]
+        ASR[Optional Speech Path<br/>Whisper transcript indexing]
+    end
+
+    subgraph MODELS[Model Providers]
+        LLM[Text LLM]
+        VLM[Vision-Language Model]
+        EMB[Embedding Models<br/>text + multimodal vectors]
+    end
+
+    U --> FE --> API
+
+    API --> ORCH
+    API --> ING
+    API --> VISION
+    API --> VIDEO
+    API --> OBS
+
+    ORCH --> TOOLS
+    ORCH --> CTRL
+    ORCH --> RET
+    ORCH --> LLM
+
+    ING --> EMB
+    EMB --> VDB
+    RET --> VDB
+    RET --> EMB
+
+    VISION --> VLM
+    VIDEO --> VLM
+    VIDEO --> ASR
+    ASR --> ING
+
+    VISION --> ING
+    VIDEO --> ING
+```
+
+What to look at as a newcomer:
+- `app/api/routes/*`: HTTP surface (ingest, query, agents, runs, vision, video, chat, metrics).
+- `app/agents/*`: multi-agent orchestration, loop control, checkpointing, and progress mapping.
+- `app/rag/*` + `app/storage/*`: ingestion, embeddings, retrieval/reranking, and vector-store adapters.
+- `app/vision/*` + `app/video/*` + `app/multimodal/*`: image/video analysis and model adapters.
+- `app/core/*`: steering policies, context compaction, event bus, dependency/config wiring.
+- `frontend/streamlit_app.py`: end-to-end UX that exercises the backend capabilities.
+
+## Skills Demonstrated In This Project
+- End-to-end AI system design: clear layering from UI/API to orchestration, retrieval, multimodal analysis, and storage.
+- Agent engineering: staged research -> analysis -> answer flow with bounded revision loops and guardrails.
+- Retrieval engineering: modular chunking/embedding/retrieval/reranking with pluggable vector backends.
+- Multimodal integration: vision + video pipelines, strict frame decoding, and optional audio transcript indexing.
+- Backend architecture: contract-oriented FastAPI routes and interface-based adapters for providers/tools/stores.
+- Runtime reliability: checkpointing, context compaction, steering controls, and live run-event telemetry.
+- Product thinking: usable Streamlit workspace with persisted chat sessions and inspectable runtime traces.
+- Engineering rigor: milestone-driven delivery with focused tests across API, orchestration, multimodal, and storage paths.
+
 ## Stack
 - Backend: FastAPI
 - Orchestration: LangGraph

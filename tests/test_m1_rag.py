@@ -327,6 +327,131 @@ def test_reranker_hook_is_applied() -> None:
     assert hits[0]["source"] == "lexical_doc"
 
 
+def test_retriever_appends_audio_transcript_for_video_hits() -> None:
+    class _Store:
+        async def search(self, vector: list[float], top_k: int, metadata_filter: dict | None = None) -> list[dict]:  # noqa: ARG002
+            return [
+                {
+                    "id": "video-visual-0",
+                    "metadata": {
+                        "source": "file:///tmp/food.mp4",
+                        "chunk_id": 4,
+                        "offset": 40,
+                        "snippet": "Visual event: Person does a thumbs up gesture.",
+                        "modality": "video",
+                        "timestamp_sec": 2.0,
+                    },
+                    "score": 0.91,
+                }
+            ][:top_k]
+
+        async def keyword_search(self, query: str, top_k: int, metadata_filter: dict | None = None) -> list[dict]:
+            if metadata_filter is None:
+                metadata_filter = {}
+            if metadata_filter.get("source") != "file:///tmp/food.mp4":
+                return []
+            if metadata_filter.get("modality") != "video":
+                return []
+            if "audio" not in query.lower():
+                return []
+            return [
+                {
+                    "id": "video-audio-0",
+                    "metadata": {
+                        "source": "file:///tmp/food.mp4",
+                        "chunk_id": 8,
+                        "offset": 80,
+                        "snippet": "Audio event: me gustan los tacos.",
+                        "modality": "video",
+                        "timestamp_sec": 2.1,
+                    },
+                    "score": 3.0,
+                }
+            ][:top_k]
+
+    embedding_client = build_embedding_client(provider="deterministic", deterministic_dimensions=32).client
+    retriever = TextRAGRetriever(
+        embedding_client=embedding_client,
+        vector_store=_Store(),  # type: ignore[arg-type]
+        dense_top_k=4,
+        lexical_top_k=4,
+        rerank_pool_size=8,
+    )
+    hits = asyncio.run(retriever.retrieve("what is said about food in the video", top_k=1))
+
+    assert any("visual event" in str(hit.get("snippet", "")).lower() for hit in hits)
+    assert any("audio event" in str(hit.get("snippet", "")).lower() for hit in hits)
+
+
+def test_retriever_selects_timestamp_nearest_transcript_candidate() -> None:
+    class _Store:
+        async def search(self, vector: list[float], top_k: int, metadata_filter: dict | None = None) -> list[dict]:  # noqa: ARG002
+            return [
+                {
+                    "id": "video-visual-1",
+                    "metadata": {
+                        "source": "file:///tmp/clip.mp4",
+                        "chunk_id": 5,
+                        "offset": 50,
+                        "snippet": "Visual event: Speaker points at food truck.",
+                        "modality": "video",
+                        "timestamp_sec": 9.8,
+                    },
+                    "score": 0.92,
+                }
+            ][:top_k]
+
+        async def keyword_search(self, query: str, top_k: int, metadata_filter: dict | None = None) -> list[dict]:
+            if metadata_filter is None:
+                metadata_filter = {}
+            if metadata_filter.get("source") != "file:///tmp/clip.mp4":
+                return []
+            if metadata_filter.get("modality") != "video":
+                return []
+            if "audio" not in query.lower():
+                return []
+            return [
+                {
+                    "id": "audio-far",
+                    "metadata": {
+                        "source": "file:///tmp/clip.mp4",
+                        "chunk_id": 11,
+                        "offset": 110,
+                        "snippet": "Audio event: unrelated intro line.",
+                        "modality": "video",
+                        "timestamp_sec": 2.0,
+                    },
+                    "score": 2.2,
+                },
+                {
+                    "id": "audio-near",
+                    "metadata": {
+                        "source": "file:///tmp/clip.mp4",
+                        "chunk_id": 12,
+                        "offset": 120,
+                        "snippet": "Audio event: me gustan los tacos.",
+                        "modality": "video",
+                        "timestamp_sec": 10.0,
+                    },
+                    "score": 2.1,
+                },
+            ][:top_k]
+
+    embedding_client = build_embedding_client(provider="deterministic", deterministic_dimensions=24).client
+    retriever = TextRAGRetriever(
+        embedding_client=embedding_client,
+        vector_store=_Store(),  # type: ignore[arg-type]
+        dense_top_k=3,
+        lexical_top_k=6,
+        rerank_pool_size=6,
+    )
+    hits = asyncio.run(retriever.retrieve("what is said near thumbs up", top_k=1))
+
+    audio_hits = [hit for hit in hits if "audio event" in str(hit.get("snippet", "")).lower()]
+    assert audio_hits
+    assert "me gustan los tacos" in str(audio_hits[0].get("snippet", "")).lower()
+
+
 def _create_minimal_docx(path, text: str) -> None:
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

@@ -41,7 +41,12 @@ class OpenAILLMClient:
         client = self._get_client()
         evidence = "\n".join(f"- {item}" for item in (context or []) if item.strip())
         system_prompt = (
-            "You are a grounded assistant. Use provided evidence and avoid fabricating unsupported claims."
+            "You are an evidence-aware assistant.\n"
+            "Prioritize provided evidence and cite concrete details from it when available.\n"
+            "You may make careful, limited inferences when they are strongly implied by the evidence.\n"
+            "When you infer beyond explicit evidence, state it as an inference and keep it conservative.\n"
+            "Do not fabricate specific facts, entities, numbers, or events not supported by evidence.\n"
+            "Unless the user explicitly asks for translation, answer in the same language as the user's question."
         )
         user_prompt = f"Question:\n{prompt}\n\nEvidence:\n{evidence if evidence else '(none)'}"
         response = await client.chat.completions.create(

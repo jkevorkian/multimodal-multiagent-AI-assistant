@@ -89,10 +89,74 @@ class TextRAGRetriever:
             fallback = []
             for candidate_list in ranked_lists:
                 fallback.extend(candidate_list)
-            return fallback[:top_k]
+            normalized_fallback = [self._normalize_result(item) for item in fallback][:top_k]
+            return await self._append_video_transcript_companions(
+                query=query,
+                results=normalized_fallback,
+                metadata_filter=metadata_filter,
+            )
 
         reranked = await self._reranker.rerank(query=query, candidates=fused, top_k=top_k)
-        return [self._normalize_result(item) for item in reranked][:top_k]
+        normalized = [self._normalize_result(item) for item in reranked][:top_k]
+        return await self._append_video_transcript_companions(
+            query=query,
+            results=normalized,
+            metadata_filter=metadata_filter,
+        )
+
+    async def _append_video_transcript_companions(
+        self,
+        *,
+        query: str,
+        results: list[dict],
+        metadata_filter: dict[str, Any] | None,
+    ) -> list[dict]:
+        if not results:
+            return results
+
+        video_hits_by_source: dict[str, list[dict]] = {}
+        for item in results:
+            if str(item.get("modality", "")).strip().lower() != "video":
+                continue
+            if self._is_transcript_snippet(str(item.get("snippet", ""))):
+                continue
+            source = str(item.get("source", "")).strip()
+            if not source:
+                continue
+            video_hits_by_source.setdefault(source, []).append(item)
+
+        if not video_hits_by_source:
+            return results
+
+        enriched = list(results)
+        seen_keys = {self._candidate_key(item) for item in enriched}
+        transcript_candidates_cache: dict[str, list[dict]] = {}
+
+        for source in video_hits_by_source:
+            transcript_candidates_cache[source] = await self._load_transcript_candidates_for_video_source(
+                source=source,
+                query=query,
+                metadata_filter=metadata_filter,
+            )
+
+        for source, video_hits in video_hits_by_source.items():
+            transcript_candidates = transcript_candidates_cache.get(source, [])
+            if not transcript_candidates:
+                continue
+            for video_hit in video_hits:
+                selected = self._select_transcript_candidate_for_video_hit(
+                    video_hit=video_hit,
+                    candidates=transcript_candidates,
+                )
+                if selected is None:
+                    continue
+                key = self._candidate_key(selected)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                enriched.append(selected)
+
+        return enriched
 
     async def _retrieve_multimodal_dense(
         self,
@@ -173,6 +237,65 @@ class TextRAGRetriever:
         except Exception:
             return []
 
+    async def _load_transcript_candidates_for_video_source(
+        self,
+        *,
+        source: str,
+        query: str,
+        metadata_filter: dict[str, Any] | None,
+    ) -> list[dict]:
+        filter_by_source = dict(metadata_filter or {})
+        filter_by_source["source"] = source
+        filter_by_source["modality"] = "video"
+        search_limit = max(10, self._lexical_top_k, self._dense_top_k)
+        queries = ("Audio event", "Audio transcript", query)
+
+        candidates: list[dict] = []
+        seen: set[str] = set()
+        for candidate_query in queries:
+            if not candidate_query.strip():
+                continue
+            keyword_results = await self._keyword_search(
+                query=candidate_query,
+                top_k=search_limit,
+                metadata_filter=filter_by_source,
+            )
+            for item in keyword_results:
+                normalized = self._normalize_result(item)
+                if str(normalized.get("source", "")).strip() != source:
+                    continue
+                if str(normalized.get("modality", "")).strip().lower() != "video":
+                    continue
+                if not self._is_transcript_snippet(str(normalized.get("snippet", ""))):
+                    continue
+                key = self._candidate_key(normalized)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(normalized)
+            if candidates:
+                break
+        return candidates
+
+    async def _keyword_search(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        metadata_filter: dict[str, Any] | None,
+    ) -> list[dict]:
+        try:
+            try:
+                return await self._vector_store.keyword_search(
+                    query=query,
+                    top_k=top_k,
+                    metadata_filter=metadata_filter,
+                )
+            except TypeError:
+                return await self._vector_store.keyword_search(query=query, top_k=top_k)
+        except Exception:
+            return []
+
     def _reciprocal_rank_fusion(self, ranked_lists: list[list[dict]], max_candidates: int) -> list[dict]:
         fused: dict[str, dict] = {}
         for ranked_list in ranked_lists:
@@ -186,6 +309,44 @@ class TextRAGRetriever:
 
         ordered = sorted(fused.values(), key=lambda row: float(row.get("score", 0.0)), reverse=True)
         return ordered[:max_candidates]
+
+    @staticmethod
+    def _is_transcript_snippet(snippet: str) -> bool:
+        lowered = snippet.strip().lower()
+        if not lowered:
+            return False
+        return (
+            lowered.startswith("audio event:")
+            or lowered.startswith("audio transcript:")
+            or "\naudio transcript:" in lowered
+            or "\naudio event:" in lowered
+        )
+
+    @staticmethod
+    def _select_transcript_candidate_for_video_hit(video_hit: dict, candidates: list[dict]) -> dict | None:
+        if not candidates:
+            return None
+
+        timestamp_value = video_hit.get("timestamp_sec")
+        try:
+            target_timestamp = float(timestamp_value) if timestamp_value is not None else None
+        except (TypeError, ValueError):
+            target_timestamp = None
+
+        if target_timestamp is None:
+            return candidates[0]
+
+        def _distance(candidate: dict) -> float:
+            raw_timestamp = candidate.get("timestamp_sec")
+            try:
+                if raw_timestamp is None:
+                    return float("inf")
+                return abs(float(raw_timestamp) - target_timestamp)
+            except (TypeError, ValueError):
+                return float("inf")
+
+        nearest = min(candidates, key=_distance)
+        return nearest
 
     @staticmethod
     def _candidate_key(item: dict) -> str:

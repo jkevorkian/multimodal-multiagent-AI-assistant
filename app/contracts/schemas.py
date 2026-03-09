@@ -19,6 +19,19 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class RuntimeModelEntry(BaseModel):
+    subsystem: str
+    component: str
+    provider: str
+    model: str | None = None
+    details: list[str] = Field(default_factory=list)
+
+
+class RuntimeModelsResponse(BaseModel):
+    entries: list[RuntimeModelEntry]
+    trace: Trace
+
+
 class IngestRequest(BaseModel):
     sources: list[str] = Field(min_length=1)
     source_type: str = Field(default="mixed")
@@ -78,6 +91,7 @@ class QueryResponse(BaseModel):
 
 class AgentRunRequest(BaseModel):
     query: str = Field(min_length=1)
+    top_k: int | None = Field(default=None, ge=1, le=20)
     tools: list[str] | None = None
     run_id: str | None = None
     steering: SteeringRequest | None = None

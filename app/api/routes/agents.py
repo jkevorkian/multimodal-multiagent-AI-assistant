@@ -70,6 +70,7 @@ async def run_agents(
         allowed_tools=enabled_tools,
         tool_budget=settings.agent_tool_budget,
         max_steps=settings.agent_max_steps,
+        retrieval_top_k=payload.top_k,
         resume_from_checkpoint=settings.agent_resume_from_checkpoint,
         retrieval_filter=payload.metadata_filter,
     )

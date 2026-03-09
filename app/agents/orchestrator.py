@@ -28,6 +28,7 @@ class AgentOrchestrator:
         answer_agent: AnswerAgent,
         checkpoint_store: NullCheckpointStore | None = None,
         max_steps: int = 6,
+        max_revision_iterations: int = 0,
         event_bus: InMemoryEventBus | None = None,
         run_timeout_sec: float = 30.0,
         context_manager: AgentContextManager | None = None,
@@ -37,6 +38,7 @@ class AgentOrchestrator:
         self._answer_agent = answer_agent
         self._checkpoint_store = checkpoint_store or NullCheckpointStore()
         self._max_steps = max_steps
+        self._max_revision_iterations = max(0, int(max_revision_iterations))
         self._event_bus = event_bus
         self._run_timeout_sec = run_timeout_sec
         self._context_manager = context_manager
@@ -156,6 +158,7 @@ class AgentOrchestrator:
         run_id: str | None = None,
         tool_budget: int = 2,
         max_steps: int | None = None,
+        retrieval_top_k: int | None = None,
         resume_from_checkpoint: bool = False,
         retrieval_filter: dict[str, Any] | None = None,
     ) -> AgentState:
@@ -163,10 +166,12 @@ class AgentOrchestrator:
         trace_id = trace.get("trace_id", "unknown")
         resolved_run_id = run_id or trace.get("run_id") or trace_id
         resolved_max_steps = max_steps if max_steps is not None else self._max_steps
-        max_revision_iterations = 1
+        max_revision_iterations = self._max_revision_iterations
         runtime_trace = dict(trace)
         runtime_trace["run_id"] = resolved_run_id
         runtime_trace["trace_id"] = trace_id
+        if retrieval_top_k is not None:
+            runtime_trace["retrieval_top_k"] = str(max(1, int(retrieval_top_k)))
         loop_controller = LoopController(
             max_steps=resolved_max_steps,
             max_tool_calls=tool_budget,
@@ -343,13 +348,12 @@ class AgentOrchestrator:
             return None
 
         normalized_answer = state.final_answer.lower()
-        if "do not have indexed context yet" in normalized_answer:
-            return "missing_context"
-        if not state.tool_outputs and state.confidence < 0.3:
-            return "low_confidence_no_tools"
-        if not state.retrieved_context and state.confidence < 0.35:
-            return "insufficient_evidence"
-        if state.errors and state.confidence < 0.4:
+        # Keep revisions for transient recoverable failures only.
+        if state.errors and (
+            "internal error" in normalized_answer
+            or "failed" in normalized_answer
+            or not state.final_answer.strip()
+        ):
             return "error_recovery"
         return None
 

@@ -16,6 +16,7 @@ class ResearchAgent:
         retrieval_top_k: int = 5,
         tool_timeout_sec: float = 2.0,
         tool_retries: int = 1,
+        max_tools_per_pass: int = 2,
         event_bus: InMemoryEventBus | None = None,
     ) -> None:
         self._retriever = retriever
@@ -23,22 +24,35 @@ class ResearchAgent:
         self._retrieval_top_k = retrieval_top_k
         self._tool_timeout_sec = tool_timeout_sec
         self._tool_retries = tool_retries
+        self._max_tools_per_pass = max(1, int(max_tools_per_pass))
         self._event_bus = event_bus
 
     async def run(self, state: AgentState) -> AgentState:
         state.record_step("research_agent")
+        retrieval_top_k = self._retrieval_top_k
+        raw_override = state.trace.get("retrieval_top_k")
+        if raw_override:
+            try:
+                retrieval_top_k = max(1, int(raw_override))
+            except (TypeError, ValueError):
+                retrieval_top_k = self._retrieval_top_k
 
         try:
             state.retrieved_context = await self._retriever.retrieve(
                 state.query,
-                top_k=self._retrieval_top_k,
+                top_k=retrieval_top_k,
                 metadata_filter=state.retrieval_filter or None,
             )
         except Exception as exc:
             state.errors.append(f"retrieval_error:{exc}")
             state.retrieved_context = []
 
-        selected_tools = self._select_tools(state.query, state.allowed_tools)
+        effective_query = self._extract_effective_tool_query(state.query)
+        selected_tools = self._select_tools(
+            query=effective_query or state.query,
+            allowed_tools=state.allowed_tools,
+            retrieved_context=state.retrieved_context,
+        )[: self._max_tools_per_pass]
         for tool_name in selected_tools:
             if not state.consume_tool_budget():
                 break
@@ -56,7 +70,11 @@ class ResearchAgent:
             )
             result = await self._tool_registry.run_tool(
                 tool_name=tool_name,
-                payload={"query": state.query, "retrieved_count": len(state.retrieved_context)},
+                payload=self._build_tool_payload(
+                    state=state,
+                    tool_name=tool_name,
+                    effective_query=effective_query,
+                ),
                 timeout_sec=self._tool_timeout_sec,
                 max_retries=self._tool_retries,
             )
@@ -114,19 +132,217 @@ class ResearchAgent:
             metadata=metadata,
         )
 
-    def _select_tools(self, query: str, allowed_tools: list[str]) -> list[str]:
+    def _build_tool_payload(
+        self,
+        *,
+        state: AgentState,
+        tool_name: str,
+        effective_query: str | None = None,
+    ) -> dict:
+        compact_context: list[dict] = []
+        for row in state.retrieved_context[:8]:
+            if not isinstance(row, dict):
+                continue
+            compact_context.append(
+                {
+                    "source": str(row.get("source", "")),
+                    "modality": str(row.get("modality", "text")),
+                    "chunk_id": row.get("chunk_id"),
+                    "score": row.get("score"),
+                    "timestamp_sec": row.get("timestamp_sec"),
+                    "frame_index": row.get("frame_index"),
+                    "snippet": str(row.get("snippet", ""))[:300],
+                }
+            )
+
+        tool_query = (effective_query or self._extract_effective_tool_query(state.query) or state.query).strip()
+        payload: dict = {
+            "query": tool_query,
+            "orchestration_query": state.query,
+            "retrieved_count": len(state.retrieved_context),
+            "retrieved_context": compact_context,
+            "metadata_filter": dict(state.retrieval_filter),
+        }
+
+        if tool_name == "rag_debug":
+            payload["top_k"] = max(1, min(4, self._retrieval_top_k))
+            # Avoid expensive full source listing on every autonomous pass.
+            payload["include_indexed_sources"] = False
+
+        if tool_name == "web_search":
+            payload["max_query_chars"] = 220
+
+        if tool_name == "video_probe":
+            payload["sample_fps"] = 1.0
+            payload["max_frames"] = 24
+
+        return payload
+
+    def _select_tools(
+        self,
+        *,
+        query: str,
+        allowed_tools: list[str],
+        retrieved_context: list[dict],
+    ) -> list[str]:
         available = [name for name in allowed_tools if self._tool_registry.has_tool(name)]
         if not available:
             return []
 
         lowered = query.lower()
         query_terms = set(re.findall(r"[a-z0-9_]+", lowered))
-        prioritized = [
-            name
-            for name in available
-            if any(token in name.lower() for token in query_terms)
-            or any(keyword in lowered for keyword in ("search", "lookup", "api", "latest", "tool", "find"))
+        score_by_tool: dict[str, int] = {name: 0 for name in available}
+        media_rows = [row for row in retrieved_context if isinstance(row, dict)]
+        has_image_hits = any(str(row.get("modality", "")).strip().lower() == "image" for row in media_rows)
+        has_video_hits = any(str(row.get("modality", "")).strip().lower() == "video" for row in media_rows)
+
+        visual_intent = any(
+            token in lowered
+            for token in (
+                "image",
+                "photo",
+                "picture",
+                "visual",
+                "look",
+                "looks like",
+                "appearance",
+                "see",
+            )
+        )
+        video_intent = any(
+            token in lowered
+            for token in (
+                "video",
+                "frame",
+                "scene",
+                "event",
+                "happen",
+                "happens",
+                "clip",
+                "timestamp",
+            )
+        )
+        audio_in_video_intent = any(
+            token in lowered
+            for token in (
+                "audio",
+                "speech",
+                "spoken",
+                "transcript",
+                "what do i say",
+                "what is said",
+            )
+        )
+        clarification_intent = any(
+            token in lowered
+            for token in ("clarify", "double check", "verify", "recheck", "reanalyze", "inspect")
+        )
+
+        # Direct token overlap between query and tool name.
+        for name in available:
+            normalized_name = name.lower()
+            if any(token in normalized_name for token in query_terms):
+                score_by_tool[name] += 3
+
+        # Query-intent to tool capability mapping.
+        intent_patterns = [
+            (("search", "latest", "news", "lookup", "internet", "web"), ("web_search",)),
+            (("http://", "https://", "url", "fetch", "page"), ("url_fetch",)),
+            (("file", "read", "open", "dir", "directory", "list", "path"), ("filesystem",)),
+            (("retrieval", "chunk", "citation", "debug", "grounding"), ("rag_debug",)),
+            (("cpu", "memory", "latency", "metrics", "system"), ("system_metrics",)),
         ]
-        if prioritized:
-            return prioritized
+        for keywords, tool_fragments in intent_patterns:
+            if not any(keyword in lowered for keyword in keywords):
+                continue
+            for name in available:
+                normalized_name = name.lower()
+                if any(fragment in normalized_name for fragment in tool_fragments):
+                    score_by_tool[name] += 5
+
+        # Clarification probes for media questions after retrieval.
+        if has_image_hits and (visual_intent or clarification_intent):
+            for name in available:
+                if "vision_probe" in name.lower():
+                    score_by_tool[name] += 8
+        if has_video_hits and (video_intent or visual_intent or clarification_intent or audio_in_video_intent):
+            for name in available:
+                normalized_name = name.lower()
+                if "video_probe" in normalized_name:
+                    score_by_tool[name] += 9
+                if audio_in_video_intent and "video_probe" in normalized_name:
+                    score_by_tool[name] += 3
+
+        prioritized = sorted(
+            available,
+            key=lambda name: (score_by_tool.get(name, 0), name),
+            reverse=True,
+        )
+        positively_scored = [name for name in prioritized if score_by_tool.get(name, 0) > 0]
+        if positively_scored:
+            return positively_scored
+
+        # Default-safe fallback when no intent is detected.
+        if "rag_debug" in available:
+            return ["rag_debug"]
         return available[:1]
+
+    def _extract_effective_tool_query(self, query: str) -> str:
+        original = query.strip()
+        if not original:
+            return ""
+
+        marker = "current user request:"
+        lowered = original.lower()
+        marker_index = lowered.rfind(marker)
+        current_request = ""
+        if marker_index >= 0:
+            tail = original[marker_index + len(marker) :].strip()
+            tail = tail.split("\n\n", maxsplit=1)[0]
+            current_request = " ".join(part.strip() for part in tail.splitlines() if part.strip())
+
+        user_turns: list[str] = []
+        for raw_line in original.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.upper().startswith("USER:"):
+                _, _, content = line.partition(":")
+                normalized = " ".join(content.split())
+                if normalized:
+                    user_turns.append(normalized)
+
+        if current_request:
+            if self._is_generic_retry_request(current_request):
+                for prior in reversed(user_turns):
+                    if prior.lower() == current_request.lower():
+                        continue
+                    if self._is_generic_retry_request(prior):
+                        continue
+                    return prior[:500]
+            return current_request[:500]
+
+        if user_turns:
+            return user_turns[-1][:500]
+
+        return " ".join(original.split())[:500]
+
+    @staticmethod
+    def _is_generic_retry_request(text: str) -> bool:
+        normalized = " ".join(text.strip().lower().split())
+        if not normalized:
+            return False
+        generic_tokens = {
+            "again",
+            "try again",
+            "retry",
+            "please retry",
+            "do it again",
+            "can you try again",
+            "please try again",
+            "retry that",
+            "recheck",
+            "check again",
+            "try once more",
+        }
+        return normalized in generic_tokens

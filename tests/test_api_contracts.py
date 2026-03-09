@@ -13,6 +13,7 @@ client = TestClient(app)
 def test_required_routes_registered() -> None:
     expected_paths = {
         "/health",
+        "/health/models",
         "/chat/sessions",
         "/chat/sessions/{chat_id}",
         "/chat/sessions/{chat_id}/messages",
@@ -40,6 +41,20 @@ def test_health_contract() -> None:
     assert payload["status"] == "ok"
     assert "service" in payload
     assert "version" in payload
+
+
+def test_health_models_contract() -> None:
+    response = client.get("/health/models")
+    payload = response.json()
+    assert response.status_code == 200
+    assert "entries" in payload
+    assert isinstance(payload["entries"], list)
+    assert payload["entries"]
+    first = payload["entries"][0]
+    assert "subsystem" in first
+    assert "component" in first
+    assert "provider" in first
+    assert "trace" in payload
 
 
 def test_ingest_contract() -> None:
@@ -214,3 +229,13 @@ def test_chat_session_contract() -> None:
     messages_payload = messages.json()
     assert messages_payload["chat_id"] == chat_id
     assert isinstance(messages_payload["messages"], list)
+
+    deleted = client.delete(f"/chat/sessions/{chat_id}")
+    assert deleted.status_code == 200
+    deleted_payload = deleted.json()
+    assert deleted_payload["chat_id"] == chat_id
+    assert deleted_payload["status"] == "deleted"
+    assert "deleted_memory" in deleted_payload
+
+    missing = client.get(f"/chat/sessions/{chat_id}")
+    assert missing.status_code == 404

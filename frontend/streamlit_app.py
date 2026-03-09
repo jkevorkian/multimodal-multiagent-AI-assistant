@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
+import mimetypes
+import re
 import tempfile
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import httpx
 import streamlit as st
@@ -82,6 +86,20 @@ INGEST_UPLOAD_TYPES = [
 ]
 IMAGE_UPLOAD_TYPES = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"]
 VIDEO_UPLOAD_TYPES = ["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpeg", "mpg"]
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpeg", ".mpg"}
+_PDF_EXTENSIONS = {".pdf"}
+_DOCX_EXTENSIONS = {".docx"}
+_PPTX_EXTENSIONS = {".pptx"}
+_XLSX_EXTENSIONS = {".xlsx"}
+_MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+_HTML_EXTENSIONS = {".html", ".htm"}
+_PDF_PREVIEW_MAX_BYTES = 12_000_000
+SOURCE_TYPE_OPTIONS = ["auto", "mixed", "text", "url", "pdf", "docx", "pptx", "xlsx", "markdown", "html", "image", "video"]
+
+
+def _supported_filetypes_text() -> str:
+    return ", ".join(ext.upper() for ext in INGEST_UPLOAD_TYPES)
 
 
 def _request_json(
@@ -229,6 +247,41 @@ def _fetch_agent_tools(base_url: str) -> tuple[list[str], dict[str, str]]:
     return names, descriptions
 
 
+def _fetch_runtime_model_entries(base_url: str) -> list[dict[str, Any]]:
+    status_code, body = _request_json("GET", base_url, "/health/models")
+    if not (200 <= status_code < 300):
+        return []
+    if not isinstance(body, dict):
+        return []
+    raw_entries = body.get("entries", [])
+    if not isinstance(raw_entries, list):
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        subsystem = str(item.get("subsystem", "")).strip()
+        component = str(item.get("component", "")).strip()
+        provider = str(item.get("provider", "")).strip()
+        if not subsystem or not component or not provider:
+            continue
+        model_raw = item.get("model")
+        model = str(model_raw).strip() if isinstance(model_raw, str) and model_raw.strip() else None
+        details_raw = item.get("details", [])
+        details = [str(value).strip() for value in details_raw if str(value).strip()] if isinstance(details_raw, list) else []
+        entries.append(
+            {
+                "subsystem": subsystem,
+                "component": component,
+                "provider": provider,
+                "model": model,
+                "details": details,
+            }
+        )
+    return entries
+
+
 def _persist_uploaded_files(uploaded_files: list[Any] | None) -> list[str]:
     if not uploaded_files:
         return []
@@ -280,6 +333,218 @@ def _persist_clipboard_images(key_prefix: str) -> list[str]:
     return saved_sources
 
 
+def _resolve_local_media_path(source: str) -> Path | None:
+    parsed = urlparse(source)
+    if parsed.scheme in {"http", "https", "data", "s3"}:
+        return None
+    if parsed.scheme == "file":
+        path_value = unquote(parsed.path)
+        if re.match(r"^/[A-Za-z]:/", path_value):
+            path_value = path_value[1:]
+        resolved = Path(path_value)
+    else:
+        resolved = Path(source)
+    return resolved if resolved.exists() else None
+
+
+def _guess_modality_from_source(source: str, fallback: str = "text") -> str:
+    parsed = urlparse(source)
+    suffix = Path(parsed.path if parsed.path else source).suffix.lower()
+    if suffix in _IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in _VIDEO_EXTENSIONS:
+        return "video"
+    if suffix == ".pdf":
+        return "pdf"
+    return fallback
+
+
+def _detect_source_type_from_sources(sources: list[str]) -> str:
+    if not sources:
+        return "mixed"
+
+    detected: set[str] = set()
+    for source in sources:
+        stripped = str(source).strip()
+        if not stripped:
+            continue
+        parsed = urlparse(stripped)
+        suffix = Path(parsed.path if parsed.path else stripped).suffix.lower()
+        scheme = parsed.scheme.lower()
+
+        if scheme in {"http", "https"} and not suffix:
+            detected.add("url")
+            continue
+        if suffix in _IMAGE_EXTENSIONS:
+            detected.add("image")
+            continue
+        if suffix in _VIDEO_EXTENSIONS:
+            detected.add("video")
+            continue
+        if suffix in _PDF_EXTENSIONS:
+            detected.add("pdf")
+            continue
+        if suffix in _DOCX_EXTENSIONS:
+            detected.add("docx")
+            continue
+        if suffix in _PPTX_EXTENSIONS:
+            detected.add("pptx")
+            continue
+        if suffix in _XLSX_EXTENSIONS:
+            detected.add("xlsx")
+            continue
+        if suffix in _MARKDOWN_EXTENSIONS:
+            detected.add("markdown")
+            continue
+        if suffix in _HTML_EXTENSIONS:
+            detected.add("html")
+            continue
+        detected.add("text")
+
+    if not detected:
+        return "mixed"
+    if len(detected) == 1:
+        return next(iter(detected))
+    if detected.issubset({"text", "url"}):
+        return "text"
+    return "mixed"
+
+
+def _extract_timestamp_from_snippet(snippet: str) -> float | None:
+    match = re.search(r"\[t=(\d+(?:\.\d+)?)s\]", snippet)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_video_frame_bytes(
+    source: str,
+    *,
+    timestamp_sec: float | None,
+    frame_index: int | None,
+) -> bytes | None:
+    local_path = _resolve_local_media_path(source)
+    if local_path is None:
+        return None
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return None
+
+    capture = cv2.VideoCapture(str(local_path))
+    if not capture or not capture.isOpened():
+        return None
+    try:
+        if frame_index is not None and frame_index >= 0:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, float(frame_index))
+        elif timestamp_sec is not None and timestamp_sec >= 0:
+            capture.set(cv2.CAP_PROP_POS_MSEC, float(timestamp_sec) * 1000.0)
+        ok, frame = capture.read()
+        if not ok:
+            return None
+        ok, encoded = cv2.imencode(".jpg", frame)
+        if not ok:
+            return None
+        if hasattr(encoded, "tobytes"):
+            return encoded.tobytes()
+        return bytes(encoded)
+    finally:
+        capture.release()
+
+
+def _render_source_preview_item(item: dict[str, Any], row_index: int) -> None:
+    source = str(item.get("source", "")).strip()
+    snippet = str(item.get("snippet", "")).strip()
+    if not source:
+        st.info("No source available for this chunk.")
+        return
+
+    fallback_modality = str(item.get("modality", "text")).strip().lower() or "text"
+    modality = _guess_modality_from_source(source, fallback=fallback_modality)
+    local_path = _resolve_local_media_path(source)
+    frame_index_raw = item.get("frame_index")
+    timestamp_raw = item.get("timestamp_sec")
+
+    try:
+        frame_index = int(frame_index_raw) if frame_index_raw is not None else None
+    except (TypeError, ValueError):
+        frame_index = None
+    try:
+        timestamp_sec = float(timestamp_raw) if timestamp_raw is not None else None
+    except (TypeError, ValueError):
+        timestamp_sec = None
+    if timestamp_sec is None:
+        timestamp_sec = _extract_timestamp_from_snippet(snippet)
+
+    st.markdown(f"**Source URI**: `{source}`")
+    if source.startswith(("http://", "https://")):
+        st.markdown(f"[Open source link]({source})")
+    elif local_path is not None:
+        st.caption(f"Local source path: `{local_path}`")
+
+    if modality == "image":
+        image_input = str(local_path) if local_path is not None else source
+        st.image(image_input, caption=f"Retrieved image source #{row_index + 1}", use_container_width=True)
+        return
+
+    if modality == "video":
+        video_input = str(local_path) if local_path is not None else source
+        start_time = int(max(0.0, timestamp_sec)) if timestamp_sec is not None else 0
+        try:
+            st.video(video_input, start_time=start_time)
+        except Exception:
+            st.warning("Could not render inline video preview for this source.")
+        if timestamp_sec is not None:
+            st.caption(f"Chunk timestamp: {timestamp_sec:.2f}s")
+        if frame_index is not None:
+            st.caption(f"Chunk frame index: {frame_index}")
+        frame_bytes = _extract_video_frame_bytes(source, timestamp_sec=timestamp_sec, frame_index=frame_index)
+        if frame_bytes is not None:
+            st.image(frame_bytes, caption="Frame preview near retrieved chunk", use_container_width=True)
+        return
+
+    if modality == "pdf":
+        if local_path is None:
+            st.info("Remote PDF preview unavailable inline. Open the source link to view.")
+            return
+        try:
+            payload = local_path.read_bytes()
+        except OSError:
+            st.warning("Could not read local PDF file.")
+            return
+        if len(payload) > _PDF_PREVIEW_MAX_BYTES:
+            st.info("PDF is large; inline preview skipped. Open the local file directly.")
+            return
+        encoded = base64.b64encode(payload).decode("ascii")
+        iframe_html = (
+            f'<iframe src="data:application/pdf;base64,{encoded}" '
+            'width="100%" height="680" style="border: none;"></iframe>'
+        )
+        st.components.v1.html(iframe_html, height=700, scrolling=True)
+        return
+
+    if local_path is not None and local_path.is_file():
+        mime_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
+        try:
+            payload = local_path.read_bytes()
+        except OSError:
+            payload = b""
+        if payload:
+            st.download_button(
+                "Download source file",
+                data=payload,
+                file_name=local_path.name,
+                mime=mime_type,
+                key=f"download_source_{row_index}_{hashlib.sha1(source.encode('utf-8')).hexdigest()[:10]}",
+            )
+    if snippet:
+        st.markdown("**Chunk snippet**")
+        st.code(snippet, language="text")
+
+
 def _render_answer_block(title: str, payload: dict[str, Any] | list[Any] | str) -> None:
     st.subheader(title)
     if not isinstance(payload, dict):
@@ -313,6 +578,16 @@ def _render_answer_block(title: str, payload: dict[str, Any] | list[Any] | str) 
                 score = round(float(item.get("score", 0.0)), 4)
             except (TypeError, ValueError):
                 score = 0.0
+            timestamp_value = item.get("timestamp_sec")
+            frame_value = item.get("frame_index")
+            try:
+                timestamp_sec = round(float(timestamp_value), 3) if timestamp_value is not None else None
+            except (TypeError, ValueError):
+                timestamp_sec = None
+            try:
+                frame_index = int(frame_value) if frame_value is not None else None
+            except (TypeError, ValueError):
+                frame_index = None
             display_rows.append(
                 {
                     "source": str(item.get("source", "unknown")),
@@ -320,12 +595,22 @@ def _render_answer_block(title: str, payload: dict[str, Any] | list[Any] | str) 
                     "chunk_id": chunk_id,
                     "offset": offset,
                     "score": score,
+                    "timestamp_sec": timestamp_sec,
+                    "frame_index": frame_index,
                     "snippet": str(item.get("snippet", "")),
                 }
             )
         if display_rows:
             st.markdown("**Retrieved RAG Chunks**")
             st.dataframe(display_rows, hide_index=True, use_container_width=True)
+            st.markdown("**Retrieved Source Previews**")
+            for row_index, row in enumerate(display_rows):
+                title_source = str(row.get("source", "source"))
+                short_label = Path(urlparse(title_source).path).name or title_source
+                title_modality = str(row.get("modality", "text")).lower()
+                chunk_label = f"{title_modality} | {short_label} | chunk {int(row.get('chunk_id', -1))}"
+                with st.expander(chunk_label, expanded=(row_index == 0)):
+                    _render_source_preview_item(row, row_index)
     if payload.get("findings"):
         st.markdown("**Findings**")
         for finding in payload["findings"]:
@@ -547,8 +832,8 @@ def _render_agents_pipeline_helper(latest_payload: dict[str, Any] | list[Any] | 
 
 
 def _render_agents_runtime_plan_helper() -> None:
-    st.markdown("### Loop/Revision Graph (M2.3)")
-    st.caption("Runtime flow uses bounded revision passes with explicit loop and budget guardrails.")
+    st.markdown("### Loop/Revision Graph (Current)")
+    st.caption("Current runtime flow includes bounded revisions, tool budgets, and event telemetry guardrails.")
     st.graphviz_chart(build_agents_revision_loop_dot())
     st.markdown("### Loop Guardrails")
     st.dataframe(agent_loop_guardrail_rows(), hide_index=True, use_container_width=True)
@@ -613,6 +898,10 @@ def _update_chat_session(base_url: str, chat_id: str, payload: dict[str, Any]) -
     return _request_json("PATCH", base_url, f"/chat/sessions/{chat_id}", payload=payload)
 
 
+def _delete_chat_session(base_url: str, chat_id: str) -> tuple[int, dict[str, Any] | list[Any] | str]:
+    return _request_json("DELETE", base_url, f"/chat/sessions/{chat_id}")
+
+
 def _fetch_chat_messages(base_url: str, chat_id: str, limit: int = 500) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     status_code, body = _request_json("GET", base_url, f"/chat/sessions/{chat_id}/messages?limit={max(limit, 1)}")
     if not (200 <= status_code < 300 and isinstance(body, dict)):
@@ -670,6 +959,22 @@ def main() -> None:
             key="request_timeout_sec",
         )
         st.caption("Run backend first, then use tabs to exercise each route.")
+        runtime_model_entries = _fetch_runtime_model_entries(backend_url)
+        st.markdown("**Runtime Model Map**")
+        if runtime_model_entries:
+            for entry in runtime_model_entries:
+                subsystem = str(entry.get("subsystem", "")).strip().upper()
+                component = str(entry.get("component", "")).strip()
+                provider = str(entry.get("provider", "")).strip()
+                model = str(entry.get("model", "")).strip()
+                details = entry.get("details", [])
+                model_segment = f" | {model}" if model else ""
+                st.caption(f"{subsystem} | {component}")
+                st.code(f"{provider}{model_segment}", language="text")
+                if isinstance(details, list) and details:
+                    st.caption(" | ".join(str(part) for part in details))
+        else:
+            st.caption("Runtime model map unavailable until backend is reachable.")
     available_tool_names, available_tool_descriptions = _fetch_agent_tools(backend_url)
 
     (
@@ -713,7 +1018,7 @@ def main() -> None:
         )
         impl_source_type = st.selectbox(
             "Source type",
-            options=["mixed", "text", "url", "pdf", "docx", "pptx", "xlsx", "markdown", "html", "image", "video"],
+            options=SOURCE_TYPE_OPTIONS,
             key="impl_source_type",
         )
         impl_uploaded_files = st.file_uploader(
@@ -722,6 +1027,7 @@ def main() -> None:
             type=INGEST_UPLOAD_TYPES,
             key="impl_uploaded_files",
         )
+        st.caption(f"Supported upload filetypes: {_supported_filetypes_text()}")
         impl_clipboard_sources = _persist_clipboard_images("impl")
         st.caption("Uploads are saved in your local temp folder and passed to backend as `file://` URIs.")
         if st.button("Index Sources", key="impl_ingest_button"):
@@ -733,11 +1039,18 @@ def main() -> None:
             else:
                 if uploaded_sources:
                     st.info(f"Prepared {len(uploaded_sources)} uploaded file(s) for ingestion.")
+                resolved_source_type = (
+                    _detect_source_type_from_sources(sources)
+                    if impl_source_type == "auto"
+                    else impl_source_type
+                )
+                if impl_source_type == "auto":
+                    st.info(f"Auto-detected source type: `{resolved_source_type}`")
                 status_code, body = _request_json(
                     "POST",
                     backend_url,
                     "/ingest/documents",
-                    payload={"sources": sources, "source_type": impl_source_type},
+                    payload={"sources": sources, "source_type": resolved_source_type},
                 )
                 _render_response(status_code, body)
 
@@ -775,7 +1088,7 @@ def main() -> None:
                     payload={"query": impl_query, "top_k": impl_top_k},
                 )
             else:
-                payload: dict[str, Any] = {"query": impl_query}
+                payload: dict[str, Any] = {"query": impl_query, "top_k": impl_top_k}
                 if impl_tools:
                     payload["tools"] = impl_tools
                 status_code, body = _run_agents_with_live_status(backend_url, payload)
@@ -910,7 +1223,8 @@ def main() -> None:
                 selected_id = picked_id
 
             new_title = st.text_input("New chat title (optional)", value="", key="chat_new_title")
-            col_new, col_archive = st.columns(2)
+            delete_confirm = st.checkbox("Confirm permanent delete", value=False, key="chat_confirm_delete")
+            col_new, col_archive, col_delete = st.columns(3)
             with col_new:
                 if st.button("Create chat", key="chat_create_button"):
                     create_code, create_body = _create_chat_session(backend_url, new_title)
@@ -933,6 +1247,20 @@ def main() -> None:
                             st.rerun()
                         else:
                             _render_response(patch_code, patch_body)
+            with col_delete:
+                if st.button("Delete selected", key="chat_delete_button"):
+                    selected_id = str(st.session_state.get("chat_selected_id", "")).strip()
+                    if not selected_id:
+                        st.error("Select a session first.")
+                    elif not delete_confirm:
+                        st.error("Enable 'Confirm permanent delete' before deleting.")
+                    else:
+                        delete_code, delete_body = _delete_chat_session(backend_url, selected_id)
+                        if 200 <= delete_code < 300:
+                            st.session_state["chat_selected_id"] = ""
+                            st.rerun()
+                        else:
+                            _render_response(delete_code, delete_body)
 
             active_chat_id = str(st.session_state.get("chat_selected_id", "")).strip()
             if not active_chat_id and not sessions:
@@ -951,7 +1279,7 @@ def main() -> None:
             chat_top_k = st.slider("RAG top_k", min_value=1, max_value=20, value=5, key="chat_top_k")
             chat_source_type = st.selectbox(
                 "Source type for per-turn ingest",
-                options=["mixed", "text", "url", "pdf", "docx", "pptx", "xlsx", "markdown", "html", "image", "video"],
+                options=SOURCE_TYPE_OPTIONS,
                 key="chat_source_type",
             )
             chat_include_global_scope = st.checkbox(
@@ -965,7 +1293,7 @@ def main() -> None:
                 options=["balanced", "concise", "strict-grounded", "creative"],
                 key="chat_steering_profile",
             )
-            chat_min_citations = st.slider("Minimum citations", min_value=0, max_value=5, value=1, key="chat_min_citations")
+            chat_min_citations = st.slider("Minimum citations", min_value=0, max_value=5, value=0, key="chat_min_citations")
             chat_abstain = st.checkbox(
                 "Abstain if citations are insufficient",
                 value=chat_profile == "strict-grounded",
@@ -1001,6 +1329,7 @@ def main() -> None:
                 "Per-turn uploads/clipboard images are attached to the selected chat and ingested before answering. "
                 "Any file extension can be uploaded; backend parsers determine what is indexable."
             )
+            st.caption(f"Supported upload filetypes: {_supported_filetypes_text()}")
 
             if active_chat_id:
                 messages, files = _fetch_chat_messages(backend_url, active_chat_id)
@@ -1023,13 +1352,18 @@ def main() -> None:
                     resolved_mode = chat_mode
                     if chat_mode == "Auto":
                         resolved_mode = _auto_select_answer_mode(chat_user_message, chat_tools)
+                    resolved_source_type = (
+                        _detect_source_type_from_sources(combined_sources)
+                        if chat_source_type == "auto"
+                        else chat_source_type
+                    )
                     mode_value = "agentic" if resolved_mode == "Agentic Run" else "rag"
                     request_payload: dict[str, Any] = {
                         "message": chat_user_message,
                         "mode": mode_value,
                         "top_k": chat_top_k,
                         "steering": steering_payload,
-                        "source_type": chat_source_type,
+                        "source_type": resolved_source_type,
                         "sources": combined_sources,
                         "include_global_scope": bool(chat_include_global_scope),
                     }
@@ -1073,7 +1407,7 @@ def main() -> None:
         )
         source_type = st.selectbox(
             "Source type",
-            options=["mixed", "url", "pdf", "docx", "pptx", "xlsx", "markdown", "html", "text", "image", "video"],
+            options=SOURCE_TYPE_OPTIONS,
         )
         uploaded_files = st.file_uploader(
             "Upload local files",
@@ -1081,6 +1415,7 @@ def main() -> None:
             type=INGEST_UPLOAD_TYPES,
             key="play_ingest_uploaded_files",
         )
+        st.caption(f"Supported upload filetypes: {_supported_filetypes_text()}")
         play_clipboard_sources = _persist_clipboard_images("play_ingest")
         st.caption("Uploaded files are saved in your local temp folder before ingestion.")
         if st.button("Run ingest", key="ingest_button"):
@@ -1092,11 +1427,14 @@ def main() -> None:
             else:
                 if uploaded_sources:
                     st.info(f"Prepared {len(uploaded_sources)} uploaded file(s) for ingestion.")
+                resolved_source_type = _detect_source_type_from_sources(sources) if source_type == "auto" else source_type
+                if source_type == "auto":
+                    st.info(f"Auto-detected source type: `{resolved_source_type}`")
                 status_code, body = _request_json(
                     "POST",
                     backend_url,
                     "/ingest/documents",
-                    payload={"sources": sources, "source_type": source_type},
+                    payload={"sources": sources, "source_type": resolved_source_type},
                 )
                 _render_response(status_code, body)
 
@@ -1149,15 +1487,20 @@ def main() -> None:
                 payload={"query": query_text, "top_k": top_k},
             )
             _render_response(status_code, body)
+            _render_answer_block("Query Output", body)
 
     with agents_tab:
         st.subheader("POST /agents/run")
-        st.caption("Default agent pipeline: research_agent -> analyst_agent -> answer_agent.")
+        st.caption(
+            "Current pipeline: research_agent -> analyst_agent -> answer_agent. "
+            "Research stage can invoke retrieval-aware tools, including media clarification probes."
+        )
         latest_agents_payload = st.session_state.get("last_agents_run_payload", {})
         _render_agents_pipeline_helper(latest_agents_payload)
         _render_agents_runtime_plan_helper()
         _render_agents_runtime_live_helper(backend_url)
         agent_query = st.text_area("Agent query", value="Analyze available context and summarize findings.")
+        agent_top_k = st.slider("Agent retrieval top_k", min_value=1, max_value=20, value=5, key="agents_top_k")
         selected_tools = st.multiselect(
             "Allowed tools (optional)",
             options=available_tool_names,
@@ -1173,12 +1516,19 @@ def main() -> None:
             st.info("No tool catalog available from backend right now.")
         else:
             st.caption("If none are selected, backend enables all listed tools.")
+            tool_rows = [
+                {"name": name, "description": available_tool_descriptions.get(name, "")}
+                for name in available_tool_names
+            ]
+            st.markdown("### Current Tool Catalog")
+            st.dataframe(tool_rows, hide_index=True, use_container_width=True)
         if st.button("Run agents", key="agents_button"):
-            payload: dict[str, Any] = {"query": agent_query}
+            payload: dict[str, Any] = {"query": agent_query, "top_k": agent_top_k}
             if selected_tools:
                 payload["tools"] = selected_tools
             status_code, body = _run_agents_with_live_status(backend_url, payload)
             _render_response(status_code, body)
+            _render_answer_block("Agent Output", body)
 
     with vision_tab:
         st.subheader("POST /vision/analyze")

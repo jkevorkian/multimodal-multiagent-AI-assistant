@@ -29,6 +29,8 @@ _DOCX_CONTENT_TYPES = {"application/vnd.openxmlformats-officedocument.wordproces
 _PPTX_CONTENT_TYPES = {"application/vnd.openxmlformats-officedocument.presentationml.presentation"}
 _XLSX_CONTENT_TYPES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 _HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
+_TIMESTAMP_EVENT_PATTERN = re.compile(r"\[t=(\d+(?:\.\d+)?)s\]")
+_SOURCE_TAG_PATTERN = re.compile(r"\[source=[^\]]+\]")
 
 # Plain-text and structured-text formats that can be decoded directly.
 _TEXT_LIKE_EXTENSIONS = {
@@ -59,6 +61,18 @@ _TEXT_LIKE_EXTENSIONS = {
 class IngestionSummary:
     accepted_sources: int
     indexed_chunks: int
+
+
+@dataclass(frozen=True)
+class _PreparedChunk:
+    source: str
+    text: str
+    chunk_id: int
+    offset: int
+    modality: str
+    mm_modality: str
+    mm_source_uri: str
+    metadata_extra: dict[str, Any]
 
 
 class DocumentIngestionService:
@@ -135,48 +149,58 @@ class DocumentIngestionService:
         for source in sources:
             modality = self._resolve_modality(source=source, source_type=source_type)
             try:
-                text = await self._load_source_representation(source=source, source_type=source_type, modality=modality)
+                prepared_chunks = await self._prepare_source_chunks(
+                    source=source,
+                    source_type=source_type,
+                    modality=modality,
+                )
             except Exception:
                 continue
-            chunks = chunk_text(
-                text=text,
-                source=source,
-                chunk_size=self._chunk_size,
-                chunk_overlap=self._chunk_overlap,
-            )
-            if not chunks:
+            if not prepared_chunks:
                 continue
 
             accepted_sources += 1
-            text_vectors_for_chunks = await self._embedding_client.embed_texts([chunk.text for chunk in chunks])
-            if len(text_vectors_for_chunks) != len(chunks):
+            text_vectors_for_chunks = await self._embedding_client.embed_texts([chunk.text for chunk in prepared_chunks])
+            if len(text_vectors_for_chunks) != len(prepared_chunks):
                 raise ValueError("embedding provider returned mismatched batch size")
             mm_vectors_for_chunks = text_vectors_for_chunks
             if self._multimodal_embedding_client is not None:
                 try:
                     mm_inputs = [
-                        MultimodalEmbeddingInput(modality=modality, text=chunk.text, source_uri=chunk.source)
-                        for chunk in chunks
+                        MultimodalEmbeddingInput(
+                            modality=chunk.mm_modality,
+                            text=chunk.text,
+                            source_uri=chunk.mm_source_uri,
+                        )
+                        for chunk in prepared_chunks
                     ]
                     candidate_mm_vectors = await self._multimodal_embedding_client.embed(mm_inputs)
-                    if len(candidate_mm_vectors) == len(chunks):
+                    if len(candidate_mm_vectors) == len(prepared_chunks):
                         mm_vectors_for_chunks = candidate_mm_vectors
                 except Exception:
                     mm_vectors_for_chunks = text_vectors_for_chunks
 
-            for chunk, text_vector, mm_vector in zip(chunks, text_vectors_for_chunks, mm_vectors_for_chunks, strict=True):
-                ids.append(chunk.id)
+            for chunk, text_vector, mm_vector in zip(
+                prepared_chunks,
+                text_vectors_for_chunks,
+                mm_vectors_for_chunks,
+                strict=True,
+            ):
+                ids.append(f"{chunk.source}::chunk-{chunk.chunk_id}")
                 text_vectors.append(text_vector)
                 multimodal_vectors.append(mm_vector)
+                row_metadata = {
+                    "source": chunk.source,
+                    "chunk_id": chunk.chunk_id,
+                    "offset": chunk.offset,
+                    "snippet": chunk.text,
+                    "modality": chunk.modality,
+                }
+                if chunk.metadata_extra:
+                    row_metadata.update(chunk.metadata_extra)
+                row_metadata.update(safe_metadata_overrides)
                 metadata.append(
-                    {
-                        "source": chunk.source,
-                        "chunk_id": chunk.chunk_id,
-                        "offset": chunk.offset,
-                        "snippet": chunk.text,
-                        "modality": modality,
-                        **safe_metadata_overrides,
-                    }
+                    row_metadata
                 )
 
         if ids:
@@ -197,6 +221,35 @@ class DocumentIngestionService:
                 await self._vector_store.upsert(ids=ids, vectors=text_vectors, metadata=metadata)
 
         return IngestionSummary(accepted_sources=accepted_sources, indexed_chunks=len(ids))
+
+    async def _prepare_source_chunks(self, source: str, source_type: str, modality: str) -> list[_PreparedChunk]:
+        if modality == "video" and self._video_ingest_enrich_with_analysis:
+            enriched = await self._build_video_evidence_chunks(source)
+            if enriched:
+                return enriched
+
+        text = await self._load_source_representation(source=source, source_type=source_type, modality=modality)
+        chunks = chunk_text(
+            text=text,
+            source=source,
+            chunk_size=self._chunk_size,
+            chunk_overlap=self._chunk_overlap,
+        )
+        prepared: list[_PreparedChunk] = []
+        for chunk in chunks:
+            prepared.append(
+                _PreparedChunk(
+                    source=chunk.source,
+                    text=chunk.text,
+                    chunk_id=chunk.chunk_id,
+                    offset=chunk.offset,
+                    modality=modality,
+                    mm_modality=modality,
+                    mm_source_uri=chunk.source,
+                    metadata_extra={},
+                )
+            )
+        return prepared
 
     async def _load_source_representation(self, source: str, source_type: str, modality: str) -> str:
         if modality == "image":
@@ -232,8 +285,21 @@ class DocumentIngestionService:
         return f"Image source: {source}\nAnalysis: {analysis}"
 
     async def _analyze_video_source(self, source: str) -> str:
-        if self._video_client is None:
+        structured = await self._analyze_video_source_structured(source)
+        if structured is None:
             return f"Video source: {source}"
+        events = " | ".join(structured["key_events"][: self._video_max_key_events])
+        return (
+            f"Video source: {source}\n"
+            f"Summary: {structured['summary']}\n"
+            f"Key events: {events}\n"
+            f"Processed frames: {structured['processed_frames']}\n"
+            f"Confidence: {structured['confidence']:.2f}"
+        )
+
+    async def _analyze_video_source_structured(self, source: str) -> dict[str, Any] | None:
+        if self._video_client is None:
+            return None
 
         adapter = VideoAnalysisAdapter(
             video_client=self._video_client,
@@ -250,18 +316,175 @@ class DocumentIngestionService:
         )
         analysis = await adapter.analyze(
             video_uri=source,
-            prompt="Extract retrieval-grounded timeline events from this video.",
+            prompt="Extract retrieval-grounded timeline events from this video. Respond in English unless another language is explicitly requested.",
             sample_fps=self._video_sample_fps,
             max_frames=self._video_max_frames,
         )
-        events = " | ".join(analysis.key_events[: self._video_max_key_events])
-        return (
-            f"Video source: {source}\n"
-            f"Summary: {analysis.summary}\n"
-            f"Key events: {events}\n"
-            f"Processed frames: {analysis.processed_frames}\n"
-            f"Confidence: {analysis.confidence:.2f}"
+        return {
+            "summary": analysis.summary,
+            "key_events": list(analysis.key_events),
+            "processed_frames": int(analysis.processed_frames),
+            "confidence": float(analysis.confidence),
+        }
+
+    async def _build_video_evidence_chunks(self, source: str) -> list[_PreparedChunk]:
+        records: list[_PreparedChunk] = []
+        next_chunk_id = 0
+        next_offset = 0
+
+        next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+            records=records,
+            source=source,
+            text=f"Video source: {source}\nIndexing mode: direct_vl_embedding",
+            modality="video",
+            mm_modality="video",
+            mm_source_uri=source,
+            next_chunk_id=next_chunk_id,
+            next_offset=next_offset,
+            metadata_extra={},
         )
+
+        transcript = await self._transcribe_video_audio_source(source)
+        transcript_entries = self._parse_timestamped_transcript_entries(transcript or "")
+        if transcript_entries:
+            for entry in transcript_entries:
+                metadata_extra: dict[str, Any] = {}
+                timestamp_sec = entry.get("timestamp_sec")
+                if timestamp_sec is not None:
+                    metadata_extra["timestamp_sec"] = timestamp_sec
+                next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+                    records=records,
+                    source=source,
+                    text=f"Audio event: {entry['text']}",
+                    modality="video",
+                    mm_modality="video",
+                    mm_source_uri=source,
+                    next_chunk_id=next_chunk_id,
+                    next_offset=next_offset,
+                    metadata_extra=metadata_extra,
+                )
+        elif self._video_audio_transcription_enabled:
+            next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+                records=records,
+                source=source,
+                text="Audio transcript: unavailable during ingestion.",
+                modality="video",
+                mm_modality="video",
+                mm_source_uri=source,
+                next_chunk_id=next_chunk_id,
+                next_offset=next_offset,
+                metadata_extra={},
+            )
+        else:
+            next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+                records=records,
+                source=source,
+                text="Audio transcript: disabled.",
+                modality="video",
+                mm_modality="video",
+                mm_source_uri=source,
+                next_chunk_id=next_chunk_id,
+                next_offset=next_offset,
+                metadata_extra={},
+            )
+
+        try:
+            structured = await self._analyze_video_source_structured(source)
+        except Exception:
+            structured = None
+
+        if structured is None:
+            next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+                records=records,
+                source=source,
+                text="Frame analysis: unavailable during ingestion.",
+                modality="video",
+                mm_modality="video",
+                mm_source_uri=source,
+                next_chunk_id=next_chunk_id,
+                next_offset=next_offset,
+                metadata_extra={},
+            )
+            return records
+
+        next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+            records=records,
+            source=source,
+            text=(
+                f"Visual summary: {structured['summary']}\n"
+                f"Processed frames: {structured['processed_frames']}\n"
+                f"Confidence: {structured['confidence']:.2f}"
+            ),
+            modality="video",
+            mm_modality="video",
+            mm_source_uri=source,
+            next_chunk_id=next_chunk_id,
+            next_offset=next_offset,
+            metadata_extra={},
+        )
+
+        key_events = structured.get("key_events", [])
+        if isinstance(key_events, list):
+            for event_index, event in enumerate(key_events):
+                event_text = str(event).strip()
+                if not event_text:
+                    continue
+                timestamp_sec = self._extract_timestamp_from_event_text(event_text)
+                cleaned_event = self._clean_temporal_event_text(event_text)
+                metadata_extra = {"frame_index": event_index}
+                if timestamp_sec is not None:
+                    metadata_extra["timestamp_sec"] = timestamp_sec
+                next_chunk_id, next_offset = self._append_prepared_chunks_from_text(
+                    records=records,
+                    source=source,
+                    text=f"Visual event: {cleaned_event}",
+                    modality="video",
+                    mm_modality="video",
+                    mm_source_uri=source,
+                    next_chunk_id=next_chunk_id,
+                    next_offset=next_offset,
+                    metadata_extra=metadata_extra,
+                )
+
+        return records
+
+    def _append_prepared_chunks_from_text(
+        self,
+        *,
+        records: list[_PreparedChunk],
+        source: str,
+        text: str,
+        modality: str,
+        mm_modality: str,
+        mm_source_uri: str,
+        next_chunk_id: int,
+        next_offset: int,
+        metadata_extra: dict[str, Any],
+    ) -> tuple[int, int]:
+        normalized = self._normalize_whitespace(text)
+        if not normalized:
+            return next_chunk_id, next_offset
+        parts = chunk_text(
+            text=normalized,
+            source=source,
+            chunk_size=self._chunk_size,
+            chunk_overlap=self._chunk_overlap,
+        )
+        for part in parts:
+            records.append(
+                _PreparedChunk(
+                    source=source,
+                    text=part.text,
+                    chunk_id=next_chunk_id,
+                    offset=next_offset + part.offset,
+                    modality=modality,
+                    mm_modality=mm_modality,
+                    mm_source_uri=mm_source_uri,
+                    metadata_extra=dict(metadata_extra),
+                )
+            )
+            next_chunk_id += 1
+        return next_chunk_id, next_offset + len(normalized) + 1
 
     async def _build_video_source_representation(self, source: str) -> str:
         # Default strategy: keep ingestion robust by indexing direct-video embeddings
@@ -342,6 +565,41 @@ class DocumentIngestionService:
 
         transcript_text = self._normalize_whitespace(str(result.get("text", "")))
         return transcript_text or None
+
+    def _parse_timestamped_transcript_entries(self, transcript: str) -> list[dict[str, Any]]:
+        if not transcript.strip():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in transcript.splitlines():
+            normalized = self._normalize_whitespace(line)
+            if not normalized:
+                continue
+            timestamp = self._extract_timestamp_from_event_text(normalized)
+            cleaned = self._clean_temporal_event_text(normalized)
+            entry: dict[str, Any] = {"text": cleaned}
+            if timestamp is not None:
+                entry["timestamp_sec"] = timestamp
+            entries.append(entry)
+        if entries:
+            return entries
+        return [{"text": self._normalize_whitespace(transcript)}]
+
+    @staticmethod
+    def _extract_timestamp_from_event_text(text: str) -> float | None:
+        match = _TIMESTAMP_EVENT_PATTERN.search(text)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _clean_temporal_event_text(text: str) -> str:
+        compact = _TIMESTAMP_EVENT_PATTERN.sub("", text)
+        compact = _SOURCE_TAG_PATTERN.sub("", compact)
+        compact = re.sub(r"\s+", " ", compact).strip()
+        return compact
 
     @classmethod
     def _load_whisper_model(cls, model_name: str):

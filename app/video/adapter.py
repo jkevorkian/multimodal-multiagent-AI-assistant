@@ -26,7 +26,7 @@ class VideoAnalysisAdapter:
         require_frame_level_findings: bool = False,
         frame_prompt_template: str = (
             "Describe this video frame at t={timestamp_sec:.1f}s with concrete entities, actions, "
-            "and scene changes relevant to a timeline summary."
+            "and scene changes relevant to a timeline summary. Respond in English unless the user explicitly asks for another language."
         ),
     ) -> None:
         self._video_client = video_client

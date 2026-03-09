@@ -16,6 +16,7 @@ from app.contracts.chat import (
     ChatMessageSendResponse,
     ChatSession,
     ChatSessionCreateRequest,
+    ChatSessionDeleteResponse,
     ChatSessionsResponse,
     ChatSessionUpdateRequest,
 )
@@ -69,7 +70,65 @@ def _fallback_answer_from_snippets(snippets: list[str]) -> str:
     return f"The model returned an empty final response. Based on retrieved evidence: {excerpt}"
 
 
-def _compose_chat_query(messages: list[dict[str, Any]], current_message: str, max_turns: int = 8) -> str:
+def _truncate_text(text: str, max_chars: int) -> str:
+    normalized = " ".join(text.split())
+    if max_chars <= 0:
+        return ""
+    if len(normalized) <= max_chars:
+        return normalized
+    if max_chars <= 3:
+        return normalized[:max_chars]
+    return normalized[: max_chars - 3].rstrip() + "..."
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _build_compact_chat_summary(
+    *,
+    messages: list[dict[str, Any]],
+    recent_turns: int,
+    max_chars: int,
+) -> str:
+    relevant = [item for item in messages if item.get("role") in {"user", "assistant"}]
+    if len(relevant) <= recent_turns:
+        return ""
+
+    older = relevant[: max(0, len(relevant) - recent_turns)]
+    sampled = older[-24:]
+    summary_lines: list[str] = []
+    for item in sampled:
+        role = str(item.get("role", "assistant")).strip().lower()
+        prefix = "User" if role == "user" else "Assistant"
+        content = _truncate_text(str(item.get("content", "")), 180)
+        if not content:
+            continue
+        summary_lines.append(f"{prefix}: {content}")
+
+    if not summary_lines:
+        return ""
+    return _truncate_text("Conversation memory: " + " | ".join(summary_lines), max_chars=max_chars)
+
+
+def _compose_chat_query(
+    messages: list[dict[str, Any]],
+    current_message: str,
+    max_turns: int = 8,
+    *,
+    memory_summary: str = "",
+    semantic_snippets: list[str] | None = None,
+) -> str:
     relevant = [item for item in messages if item.get("role") in {"user", "assistant"}][-max_turns:]
     lines: list[str] = []
     for item in relevant:
@@ -79,13 +138,21 @@ def _compose_chat_query(messages: list[dict[str, Any]], current_message: str, ma
         role = str(item.get("role", "assistant")).upper()
         lines.append(f"{role}: {content}")
     transcript = "\n".join(lines)
-    if not transcript:
-        return current_message
-    return (
-        "Conversation context (most recent turns):\n"
-        f"{transcript}\n\n"
-        f"Current user request:\n{current_message}"
-    )
+    sections: list[str] = []
+    compact_summary = memory_summary.strip()
+    if compact_summary:
+        sections.append(f"Conversation memory summary:\n{compact_summary}")
+
+    semantic = _dedupe_preserve_order([_truncate_text(item, 220) for item in (semantic_snippets or []) if item])
+    if semantic:
+        semantic_block = "\n".join(f"- {item}" for item in semantic[:8])
+        sections.append(f"Relevant past conversation snippets:\n{semantic_block}")
+
+    if transcript:
+        sections.append(f"Conversation context (most recent turns):\n{transcript}")
+
+    sections.append(f"Current user request:\n{current_message}")
+    return "\n\n".join(sections)
 
 
 def _format_sse_event(sequence_number: int, payload_json: str) -> str:
@@ -109,6 +176,174 @@ def _metadata_filter_for_chat(*, chat_id: str, include_global_scope: bool) -> di
     if include_global_scope:
         return None
     return {"chat_id": chat_id, "scope": "chat"}
+
+
+def _normalize_memory_search_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else item
+    source = str(metadata.get("source", "")).strip()
+    snippet = _clean_snippet(str(metadata.get("snippet", "")))
+    if not source or not snippet:
+        return None
+    try:
+        score = float(item.get("score", 0.0))
+    except (TypeError, ValueError):
+        score = 0.0
+    return {
+        "source": source,
+        "snippet": snippet,
+        "message_id": str(metadata.get("message_id", "")).strip(),
+        "role": str(metadata.get("role", "")).strip(),
+        "score": score,
+    }
+
+
+async def _retrieve_semantic_chat_memory(
+    *,
+    container: ServiceContainer,
+    chat_id: str,
+    query: str,
+    top_k: int,
+    exclude_message_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if not query.strip() or top_k <= 0:
+        return []
+
+    metadata_filter = {"chat_id": chat_id, "scope": "chat_memory"}
+    normalized_hits: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+
+    dense_results: list[dict[str, Any]] = []
+    query_vector: list[float] | None = None
+    try:
+        query_vector = await container.embeddings.embed_text(query)
+    except Exception:
+        query_vector = None
+    if query_vector and any(abs(value) > 0 for value in query_vector):
+        if hasattr(container.vector_store, "search_named"):
+            try:
+                dense_results = await container.vector_store.search_named(
+                    vector=query_vector,
+                    top_k=max(top_k * 2, 8),
+                    vector_name=settings.rag_text_vector_name,
+                    metadata_filter=metadata_filter,
+                )
+            except TypeError:
+                try:
+                    dense_results = await container.vector_store.search_named(
+                        vector=query_vector,
+                        top_k=max(top_k * 2, 8),
+                        vector_name=settings.rag_text_vector_name,
+                    )
+                except Exception:
+                    dense_results = []
+            except Exception:
+                dense_results = []
+        else:
+            try:
+                dense_results = await container.vector_store.search(
+                    vector=query_vector,
+                    top_k=max(top_k * 2, 8),
+                    metadata_filter=metadata_filter,
+                )
+            except TypeError:
+                try:
+                    dense_results = await container.vector_store.search(vector=query_vector, top_k=max(top_k * 2, 8))
+                except Exception:
+                    dense_results = []
+            except Exception:
+                dense_results = []
+
+    lexical_results: list[dict[str, Any]] = []
+    try:
+        lexical_results = await container.vector_store.keyword_search(
+            query=query,
+            top_k=max(top_k * 2, 8),
+            metadata_filter=metadata_filter,
+        )
+    except TypeError:
+        try:
+            lexical_results = await container.vector_store.keyword_search(query=query, top_k=max(top_k * 2, 8))
+        except Exception:
+            lexical_results = []
+    except Exception:
+        lexical_results = []
+
+    for candidate in [*dense_results, *lexical_results]:
+        if not isinstance(candidate, dict):
+            continue
+        normalized = _normalize_memory_search_item(candidate)
+        if normalized is None:
+            continue
+        if exclude_message_id and normalized["message_id"] == exclude_message_id:
+            continue
+        dedupe_key = normalized["message_id"] or f"{normalized['source']}::{normalized['snippet']}"
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        normalized_hits.append(normalized)
+        if len(normalized_hits) >= top_k:
+            break
+
+    return normalized_hits
+
+
+async def _index_chat_message_memory(
+    *,
+    container: ServiceContainer,
+    chat_id: str,
+    message: dict[str, Any],
+) -> None:
+    if not settings.chat_memory_indexing_enabled:
+        return
+    role = str(message.get("role", "")).strip().lower()
+    if role not in {"user", "assistant"}:
+        return
+
+    message_id = str(message.get("message_id", "")).strip()
+    content = _clean_snippet(str(message.get("content", "")))
+    if not message_id or not content:
+        return
+
+    indexed_text = _truncate_text(content, 1200)
+    source = f"chat://{chat_id}/message/{message_id}"
+    metadata = {
+        "source": source,
+        "chunk_id": 0,
+        "offset": 0,
+        "snippet": indexed_text,
+        "modality": "text",
+        "chat_id": chat_id,
+        "scope": "chat_memory",
+        "role": role,
+        "message_id": message_id,
+    }
+    vector_id = f"chat_memory::{chat_id}::{message_id}"
+
+    try:
+        vector = await container.embeddings.embed_text(indexed_text)
+    except Exception:
+        return
+    if not vector:
+        return
+
+    named_vectors = {
+        settings.rag_text_vector_name: [vector],
+        settings.rag_multimodal_vector_name: [vector],
+    }
+    try:
+        if hasattr(container.vector_store, "upsert_named"):
+            await container.vector_store.upsert_named(  # type: ignore[attr-defined]
+                ids=[vector_id],
+                vectors_by_name=named_vectors,
+                metadata=[metadata],
+            )
+        else:
+            await container.vector_store.upsert(ids=[vector_id], vectors=[vector], metadata=[metadata])
+    except Exception:
+        try:
+            await container.vector_store.upsert(ids=[vector_id], vectors=[vector], metadata=[metadata])
+        except Exception:
+            return
 
 
 @router.post("/chat/sessions", response_model=ChatSession)
@@ -159,6 +394,26 @@ async def patch_chat_session(
     if session is None:
         raise HTTPException(status_code=404, detail="chat_not_found")
     return ChatSession(**session)
+
+
+@router.delete("/chat/sessions/{chat_id}", response_model=ChatSessionDeleteResponse)
+async def delete_chat_session(
+    chat_id: str,
+    request: Request,
+    container: ServiceContainer = Depends(get_container),
+) -> ChatSessionDeleteResponse:
+    deleted = container.chat_store.delete_session(chat_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="chat_not_found")
+    return ChatSessionDeleteResponse(
+        chat_id=chat_id,
+        status="deleted",
+        deleted_messages=int(deleted.get("deleted_messages", 0)),
+        deleted_files=int(deleted.get("deleted_files", 0)),
+        deleted_runs=int(deleted.get("deleted_runs", 0)),
+        deleted_memory=int(deleted.get("deleted_memory", 0)),
+        trace=Trace(request_id=request.state.request_id, trace_id=request.state.trace_id),
+    )
 
 
 @router.get("/chat/sessions/{chat_id}/messages", response_model=ChatMessagesResponse)
@@ -267,8 +522,26 @@ async def send_chat_message(
             metadata={"indexed_chunks": indexed_chunks},
         )
 
-    history = container.chat_store.list_messages(chat_id=chat_id, limit=40)
-    composed_query = _compose_chat_query(history, payload.message)
+    history_limit = max(20, int(settings.chat_memory_history_limit))
+    recent_turns = max(2, int(settings.chat_memory_recent_turns))
+    history = container.chat_store.list_messages(chat_id=chat_id, limit=history_limit)
+    memory_record = container.chat_store.get_memory(chat_id)
+    memory_summary = str(memory_record.get("summary_text", "")).strip() if memory_record else ""
+    semantic_memory_hits = await _retrieve_semantic_chat_memory(
+        container=container,
+        chat_id=chat_id,
+        query=payload.message,
+        top_k=max(0, int(settings.chat_memory_semantic_top_k)),
+        exclude_message_id=str(user_message.get("message_id", "")),
+    )
+    semantic_memory_snippets = [str(item.get("snippet", "")).strip() for item in semantic_memory_hits if item.get("snippet")]
+    composed_query = _compose_chat_query(
+        history,
+        payload.message,
+        max_turns=recent_turns,
+        memory_summary=memory_summary,
+        semantic_snippets=semantic_memory_snippets,
+    )
     effective_mode = payload.mode if payload.mode != "auto" else _auto_mode(payload.message, payload.tools)
     metadata_filter = _metadata_filter_for_chat(chat_id=chat_id, include_global_scope=payload.include_global_scope)
 
@@ -289,6 +562,10 @@ async def send_chat_message(
         except Exception:
             context = []
         snippets = [cleaned for item in context if item.get("snippet") for cleaned in [_clean_snippet(item["snippet"])] if cleaned]
+        if memory_summary:
+            snippets.insert(0, f"Conversation memory summary: {memory_summary}")
+        snippets.extend(semantic_memory_snippets)
+        snippets = _dedupe_preserve_order(snippets)
         try:
             answer = await container.llm.generate(composed_query, snippets)
         except Exception:
@@ -296,6 +573,13 @@ async def send_chat_message(
         if not answer.strip():
             answer = _fallback_answer_from_snippets(snippets)
         citations = [f"{item['source']}#chunk-{item['chunk_id']}" for item in context]
+        memory_citations = [
+            f"{str(item.get('source', 'chat://memory'))}#memory"
+            for item in semantic_memory_hits
+            if str(item.get("source", "")).strip()
+        ]
+        citations.extend(memory_citations)
+        citations = _dedupe_preserve_order(citations)
         answer, grounding_notes = enforce_grounding_policy(
             answer=answer,
             citations=citations,
@@ -327,6 +611,7 @@ async def send_chat_message(
             allowed_tools=enabled_tools,
             tool_budget=settings.agent_tool_budget,
             max_steps=settings.agent_max_steps,
+            retrieval_top_k=payload.top_k,
             resume_from_checkpoint=settings.agent_resume_from_checkpoint,
             retrieval_filter=metadata_filter,
         )
@@ -367,8 +652,21 @@ async def send_chat_message(
             "ingestion_status": ingestion_status,
             "accepted_sources": accepted_sources,
             "indexed_chunks": indexed_chunks,
+            "memory_summary_used": bool(memory_summary),
+            "memory_hits": len(semantic_memory_hits),
         },
     )
+
+    await _index_chat_message_memory(container=container, chat_id=chat_id, message=user_message)
+    await _index_chat_message_memory(container=container, chat_id=chat_id, message=assistant_message)
+
+    latest_messages = container.chat_store.list_messages(chat_id=chat_id, limit=history_limit)
+    compact_summary = _build_compact_chat_summary(
+        messages=latest_messages,
+        recent_turns=recent_turns,
+        max_chars=max(200, int(settings.chat_memory_summary_max_chars)),
+    )
+    container.chat_store.upsert_memory(chat_id=chat_id, summary_text=compact_summary)
 
     return ChatMessageSendResponse(
         chat_id=chat_id,
