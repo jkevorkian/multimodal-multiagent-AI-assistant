@@ -14,10 +14,13 @@ from app.storage.index_summary import summarize_indexed_sources
 class _MemoryRecord:
     id: str
     vector: list[float]
+    vectors_by_name: dict[str, list[float]]
     metadata: dict[str, Any]
 
 
 class PgVectorStore:
+    _DEFAULT_TEXT_VECTOR_NAME = "text_dense"
+
     def __init__(
         self,
         database_url: str | None = None,
@@ -45,7 +48,54 @@ class PgVectorStore:
                 self._use_postgres = False
 
         for item_id, vector, item_metadata in zip(ids, vectors, metadata, strict=True):
-            self._records[item_id] = _MemoryRecord(id=item_id, vector=vector, metadata=item_metadata)
+            self._records[item_id] = _MemoryRecord(
+                id=item_id,
+                vector=vector,
+                vectors_by_name={self._DEFAULT_TEXT_VECTOR_NAME: vector},
+                metadata=item_metadata,
+            )
+
+    async def upsert_named(
+        self,
+        ids: list[str],
+        vectors_by_name: dict[str, list[list[float]]],
+        metadata: list[dict[str, Any]],
+    ) -> None:
+        if not ids:
+            return
+        if not vectors_by_name:
+            raise ValueError("vectors_by_name must include at least one vector name")
+        if len(metadata) != len(ids):
+            raise ValueError("ids and metadata length must match")
+
+        named_items = list(vectors_by_name.items())
+        first_name, first_vectors = named_items[0]
+        if len(first_vectors) != len(ids):
+            raise ValueError("named vector batch length must match ids")
+        for vector_name, vectors in named_items:
+            if len(vectors) != len(ids):
+                raise ValueError(f"named vector batch length mismatch for '{vector_name}'")
+
+        selected_vector_name = self._select_preferred_vector_name(vectors_by_name)
+        selected_vectors = vectors_by_name[selected_vector_name]
+
+        if self._use_postgres:
+            try:
+                self._upsert_postgres(ids, selected_vectors, metadata)
+            except Exception:
+                self._use_postgres = False
+            else:
+                return
+
+        for index, item_id in enumerate(ids):
+            named_row_vectors = {name: vectors[index] for name, vectors in named_items}
+            primary_vector = named_row_vectors.get(selected_vector_name, first_vectors[index])
+            self._records[item_id] = _MemoryRecord(
+                id=item_id,
+                vector=primary_vector,
+                vectors_by_name=named_row_vectors,
+                metadata=metadata[index],
+            )
 
     async def search(
         self,
@@ -71,6 +121,37 @@ class PgVectorStore:
             for record in self._records.values()
             if self._metadata_matches(record.metadata, metadata_filter)
         ]
+        scored.sort(key=lambda item: item["score"], reverse=True)
+        return scored[:top_k]
+
+    async def search_named(
+        self,
+        vector: list[float],
+        top_k: int,
+        vector_name: str,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
+        if top_k <= 0:
+            return []
+
+        if self._use_postgres:
+            try:
+                return self._search_postgres(vector, top_k, metadata_filter=metadata_filter)
+            except Exception:
+                self._use_postgres = False
+
+        scored = []
+        for record in self._records.values():
+            if not self._metadata_matches(record.metadata, metadata_filter):
+                continue
+            candidate_vector = record.vectors_by_name.get(vector_name, record.vector)
+            scored.append(
+                {
+                    "id": record.id,
+                    "metadata": record.metadata,
+                    "score": cosine_similarity(vector, candidate_vector),
+                }
+            )
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
@@ -300,3 +381,11 @@ class PgVectorStore:
             if metadata.get(key) != expected:
                 return False
         return True
+
+    @classmethod
+    def _select_preferred_vector_name(cls, vectors_by_name: dict[str, list[list[float]]]) -> str:
+        if cls._DEFAULT_TEXT_VECTOR_NAME in vectors_by_name:
+            return cls._DEFAULT_TEXT_VECTOR_NAME
+        if "mm_dense" in vectors_by_name:
+            return "mm_dense"
+        return next(iter(vectors_by_name.keys()))

@@ -1,5 +1,6 @@
 from app.interfaces.embedding import EmbeddingClient
 from app.interfaces.llm import LLMClient
+from app.interfaces.multimodal_embedding import MultimodalEmbeddingClient, MultimodalEmbeddingInput
 from app.interfaces.reranker import Reranker
 from app.interfaces.retriever import Retriever
 from app.interfaces.tool import Tool
@@ -10,6 +11,8 @@ from app.interfaces.vision import VisionClient
 __all__ = [
     "LLMClient",
     "EmbeddingClient",
+    "MultimodalEmbeddingClient",
+    "MultimodalEmbeddingInput",
     "Reranker",
     "VisionClient",
     "VideoClient",

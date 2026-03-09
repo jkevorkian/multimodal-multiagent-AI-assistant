@@ -20,6 +20,10 @@ class QdrantVectorStore:
         url: str,
         collection_name: str = "rag_chunks",
         embedding_dimensions: int = 1536,
+        multimodal_embedding_dimensions: int | None = None,
+        text_vector_name: str = "text_dense",
+        multimodal_vector_name: str = "mm_dense",
+        enable_named_vectors: bool = True,
         api_key: str | None = None,
         prefer_grpc: bool = False,
         timeout_sec: float = 10.0,
@@ -27,28 +31,60 @@ class QdrantVectorStore:
         self._url = url
         self._collection_name = collection_name
         self._embedding_dimensions = embedding_dimensions
+        self._multimodal_embedding_dimensions = multimodal_embedding_dimensions or embedding_dimensions
+        self._text_vector_name = text_vector_name
+        self._multimodal_vector_name = multimodal_vector_name
+        self._enable_named_vectors = enable_named_vectors
         self._api_key = api_key
         self._prefer_grpc = prefer_grpc
         self._timeout_sec = timeout_sec
         self._client: Any | None = None
         self._models: Any | None = None
         self._metadata_cache: dict[str, _MetadataRecord] = {}
+        self._supports_named_vectors = False
 
         self._enabled = self._try_initialize()
 
     async def upsert(self, ids: list[str], vectors: list[list[float]], metadata: list[dict[str, Any]]) -> None:
-        if not (len(ids) == len(vectors) == len(metadata)):
-            raise ValueError("ids, vectors, and metadata length must match")
+        await self.upsert_named(
+            ids=ids,
+            vectors_by_name={self._text_vector_name: vectors},
+            metadata=metadata,
+        )
+
+    async def upsert_named(
+        self,
+        ids: list[str],
+        vectors_by_name: dict[str, list[list[float]]],
+        metadata: list[dict[str, Any]],
+    ) -> None:
+        if not ids:
+            return
+        if not vectors_by_name:
+            raise ValueError("vectors_by_name must include at least one vector name")
+        if len(metadata) != len(ids):
+            raise ValueError("ids and metadata length must match")
         if not self._enabled:
             raise RuntimeError("Qdrant store is not enabled")
+
+        named_items = list(vectors_by_name.items())
+        for vector_name, vectors in named_items:
+            if len(vectors) != len(ids):
+                raise ValueError(f"named vector batch length mismatch for '{vector_name}'")
 
         assert self._client is not None
         assert self._models is not None
 
+        selected_name = self._pick_preferred_vector_name(vectors_by_name)
         points = []
-        for item_id, vector, item_metadata in zip(ids, vectors, metadata, strict=True):
-            self._metadata_cache[item_id] = _MetadataRecord(id=item_id, metadata=item_metadata)
-            points.append(self._models.PointStruct(id=item_id, vector=vector, payload=item_metadata))
+        for row_index, item_id in enumerate(ids):
+            payload = metadata[row_index]
+            self._metadata_cache[item_id] = _MetadataRecord(id=item_id, metadata=payload)
+            if self._supports_named_vectors:
+                point_vector: Any = {name: vectors[row_index] for name, vectors in named_items}
+            else:
+                point_vector = vectors_by_name[selected_name][row_index]
+            points.append(self._models.PointStruct(id=item_id, vector=point_vector, payload=payload))
 
         self._client.upsert(collection_name=self._collection_name, points=points, wait=True)
 
@@ -58,56 +94,29 @@ class QdrantVectorStore:
         top_k: int,
         metadata_filter: dict[str, Any] | None = None,
     ) -> list[dict]:
+        return await self.search_named(
+            vector=vector,
+            top_k=top_k,
+            vector_name=self._text_vector_name,
+            metadata_filter=metadata_filter,
+        )
+
+    async def search_named(
+        self,
+        vector: list[float],
+        top_k: int,
+        vector_name: str,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
         if top_k <= 0:
             return []
         if not self._enabled:
             raise RuntimeError("Qdrant store is not enabled")
 
         assert self._client is not None
-        assert self._models is not None
-        results: list[Any]
         qdrant_filter = self._build_qdrant_filter(metadata_filter)
-
-        if hasattr(self._client, "query_points"):
-            try:
-                query_response = self._client.query_points(
-                    collection_name=self._collection_name,
-                    query=vector,
-                    limit=top_k,
-                    with_payload=True,
-                    query_filter=qdrant_filter,
-                )
-            except TypeError:
-                query_response = self._client.query_points(
-                    collection_name=self._collection_name,
-                    query=vector,
-                    limit=top_k,
-                    with_payload=True,
-                    filter=qdrant_filter,
-                )
-            points = query_response.points if hasattr(query_response, "points") else query_response
-            results = list(points)
-        else:
-            try:
-                results = list(
-                    self._client.search(
-                        collection_name=self._collection_name,
-                        query_vector=vector,
-                        limit=top_k,
-                        with_payload=True,
-                        query_filter=qdrant_filter,
-                    )
-                )
-            except TypeError:
-                results = list(
-                    self._client.search(
-                        collection_name=self._collection_name,
-                        query_vector=vector,
-                        limit=top_k,
-                        with_payload=True,
-                        filter=qdrant_filter,
-                    )
-                )
+        using_name = vector_name if self._supports_named_vectors and vector_name else None
+        results = self._search_qdrant(vector=vector, top_k=top_k, qdrant_filter=qdrant_filter, using_name=using_name)
 
         normalized: list[dict] = []
         for row in results:
@@ -207,18 +216,117 @@ class QdrantVectorStore:
                 prefer_grpc=self._prefer_grpc,
                 timeout=self._timeout_sec,
             )
+            created_named_vectors = False
             if not client.collection_exists(self._collection_name):
-                client.create_collection(
-                    collection_name=self._collection_name,
-                    vectors_config=models.VectorParams(size=self._embedding_dimensions, distance=models.Distance.COSINE),
-                )
+                if self._enable_named_vectors:
+                    client.create_collection(
+                        collection_name=self._collection_name,
+                        vectors_config={
+                            self._text_vector_name: models.VectorParams(
+                                size=self._embedding_dimensions,
+                                distance=models.Distance.COSINE,
+                            ),
+                            self._multimodal_vector_name: models.VectorParams(
+                                size=self._multimodal_embedding_dimensions,
+                                distance=models.Distance.COSINE,
+                            ),
+                        },
+                    )
+                    created_named_vectors = True
+                else:
+                    client.create_collection(
+                        collection_name=self._collection_name,
+                        vectors_config=models.VectorParams(size=self._embedding_dimensions, distance=models.Distance.COSINE),
+                    )
+
             self._client = client
             self._models = models
+            if self._enable_named_vectors:
+                self._supports_named_vectors = created_named_vectors or self._collection_has_named_vectors()
+            else:
+                self._supports_named_vectors = False
             return True
         except Exception:
             self._client = None
             self._models = None
+            self._supports_named_vectors = False
             return False
+
+    def _collection_has_named_vectors(self) -> bool:
+        if self._client is None:
+            return False
+        try:
+            info = self._client.get_collection(self._collection_name)
+        except Exception:
+            return False
+        vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
+        if vectors is None:
+            return False
+        if isinstance(vectors, dict):
+            return self._text_vector_name in vectors or self._multimodal_vector_name in vectors
+        candidate = getattr(vectors, "__root__", None)
+        if isinstance(candidate, dict):
+            return self._text_vector_name in candidate or self._multimodal_vector_name in candidate
+        for attr in ("text_dense", "mm_dense"):
+            if getattr(vectors, attr, None) is not None:
+                return True
+        try:
+            as_dict = dict(vectors)
+        except Exception:
+            return False
+        return self._text_vector_name in as_dict or self._multimodal_vector_name in as_dict
+
+    def _search_qdrant(
+        self,
+        *,
+        vector: list[float],
+        top_k: int,
+        qdrant_filter: Any | None,
+        using_name: str | None,
+    ) -> list[Any]:
+        assert self._client is not None
+
+        if hasattr(self._client, "query_points"):
+            kwargs: dict[str, Any] = {
+                "collection_name": self._collection_name,
+                "query": vector,
+                "limit": top_k,
+                "with_payload": True,
+            }
+            if qdrant_filter is not None:
+                kwargs["query_filter"] = qdrant_filter
+            if using_name:
+                kwargs["using"] = using_name
+            try:
+                response = self._client.query_points(**kwargs)
+            except TypeError:
+                if "query_filter" in kwargs:
+                    kwargs["filter"] = kwargs.pop("query_filter")
+                try:
+                    response = self._client.query_points(**kwargs)
+                except TypeError:
+                    kwargs.pop("using", None)
+                    response = self._client.query_points(**kwargs)
+            points = response.points if hasattr(response, "points") else response
+            return list(points)
+
+        query_vector: Any = vector
+        if using_name:
+            query_vector = (using_name, vector)
+        kwargs = {
+            "collection_name": self._collection_name,
+            "query_vector": query_vector,
+            "limit": top_k,
+            "with_payload": True,
+        }
+        if qdrant_filter is not None:
+            kwargs["query_filter"] = qdrant_filter
+        try:
+            return list(self._client.search(**kwargs))
+        except TypeError:
+            if "query_filter" in kwargs:
+                kwargs["filter"] = kwargs.pop("query_filter")
+            return list(self._client.search(**kwargs))
 
     def _warm_metadata_cache(self, max_points: int = 5000) -> None:
         if not self._enabled or max_points <= 0:
@@ -289,3 +397,11 @@ class QdrantVectorStore:
             if metadata.get(key) != expected:
                 return False
         return True
+
+    @staticmethod
+    def _pick_preferred_vector_name(vectors_by_name: dict[str, list[list[float]]]) -> str:
+        if "text_dense" in vectors_by_name:
+            return "text_dense"
+        if "mm_dense" in vectors_by_name:
+            return "mm_dense"
+        return next(iter(vectors_by_name.keys()))

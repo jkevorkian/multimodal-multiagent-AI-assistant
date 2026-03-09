@@ -8,10 +8,27 @@ class VectorStore(Protocol):
     async def upsert(self, ids: list[str], vectors: list[list[float]], metadata: list[dict[str, Any]]) -> None:
         ...
 
+    async def upsert_named(
+        self,
+        ids: list[str],
+        vectors_by_name: dict[str, list[list[float]]],
+        metadata: list[dict[str, Any]],
+    ) -> None:
+        ...
+
     async def search(
         self,
         vector: list[float],
         top_k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[dict]:
+        ...
+
+    async def search_named(
+        self,
+        vector: list[float],
+        top_k: int,
+        vector_name: str,
         metadata_filter: dict[str, Any] | None = None,
     ) -> list[dict]:
         ...

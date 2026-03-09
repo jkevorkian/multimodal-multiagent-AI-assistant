@@ -12,3 +12,5 @@ pypdf
 sentence-transformers #use "openai" package for external API embedding generation or "sentence-transformers" package for local embedding generation
 psycopg
 qdrant-client
+openai-whisper
+opencv-python

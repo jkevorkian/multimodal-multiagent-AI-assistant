@@ -73,6 +73,10 @@ def test_query_creative_profile_applies_style_prefix(tmp_path) -> None:
     payload = response.json()
     assert payload["answer"].startswith("Creative framing:")
     assert payload["steering_applied"]["profile"] == "creative"
+    assert isinstance(payload.get("retrieved_chunks"), list)
+    assert payload["retrieved_chunks"]
+    assert "source" in payload["retrieved_chunks"][0]
+    assert "snippet" in payload["retrieved_chunks"][0]
 
 
 def test_agents_route_reports_steering_application() -> None:
@@ -95,3 +99,5 @@ def test_agents_route_reports_steering_application() -> None:
     payload = response.json()
     assert payload["steering_applied"]["profile"] == "balanced"
     assert any("tool_require_applied" in note for note in payload["steering_applied"]["notes"])
+    assert isinstance(payload.get("citations"), list)
+    assert isinstance(payload.get("retrieved_chunks"), list)

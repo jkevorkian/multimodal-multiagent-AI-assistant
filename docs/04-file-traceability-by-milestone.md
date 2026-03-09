@@ -36,19 +36,19 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: defines FR/NFR testable requirements and boundaries.
 
 `docs/02-implementation-roadmap.md`
-- Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M5.3`; status `implemented`.
 - Theoretical role: milestone planning artifact for incremental delivery.
 - Technical/practical role: defines objectives, outputs, risks, and DoD per milestone.
 
 `docs/03-didactic-traceability.md`
-- Milestone metadata: introduced `M0`; updated `M2.4`; status `implemented`.
+- Milestone metadata: introduced `M0`; updated `M5.3`; status `implemented`.
 - Theoretical role: learning/decision narrative over implementation lifecycle.
 - Technical/practical role: stores didactic cards, decision log, and troubleshooting heuristics.
 
 `docs/07-local-model-backends.md`
-- Milestone metadata: introduced `M3`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M3`; updated `M5.3`; status `implemented`.
 - Theoretical role: deployment/options guidance for local and self-hosted model backends.
-- Technical/practical role: documents OpenAI-compatible local endpoint profiles (Ollama/vLLM), container setup, and `.env` wiring.
+- Technical/practical role: documents OpenAI-compatible local endpoint profiles (Ollama/vLLM), container setup, and `.env` wiring including multimodal embedding/reranker endpoint settings.
 
 `docs/08-multimodal-research-and-m41.md`
 - Milestone metadata: introduced `M4.1`; updated `M4.1`; status `implemented`.
@@ -260,7 +260,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Technical/practical role: tests ingestion flows, chunk determinism, hybrid retrieval behavior, and reranker hook behavior.
 
 `docs/04-file-traceability-by-milestone.md`
-- Milestone metadata: introduced `M1`; updated `M3`; status `implemented`.
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
 - Theoretical role: dedicated file-level traceability registry.
 - Technical/practical role: separates file mapping concerns from didactic decision narratives.
 
@@ -693,7 +693,74 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: regression guard for steering policy behavior.
 - Technical/practical role: validates tool policy resolution, strict-grounded abstention, creative style shaping, and route-level steering metadata.
 
-## 12. M6 - Evaluation and Deployment (Planned)
+## 12. M5.3 - Multimodal Embedding Stack
+
+`app/interfaces/multimodal_embedding.py`
+- Milestone metadata: introduced `M5.3`; status `implemented`.
+- Theoretical role: multimodal embedding contract boundary.
+- Technical/practical role: defines typed multimodal embedding inputs and provider protocol (`embed`, `embed_query`).
+
+`app/rag/multimodal_embeddings.py`
+- Milestone metadata: introduced `M5.3`; status `implemented`.
+- Theoretical role: provider selection boundary for cross-modal embedding generation.
+- Technical/practical role: implements deterministic fallback and OpenAI-compatible multimodal embedding adapters with runtime provider factory.
+
+`app/interfaces/vector_store.py`
+- Milestone metadata: introduced `M0`; updated `M5.3`; status `implemented`.
+- Theoretical role change: vector-store contract evolves from single-vector-only semantics to dual-mode search/write semantics.
+- Technical/practical change: adds named-vector upsert/search contract methods for multimodal retrieval paths.
+
+`app/rag/ingestion.py`
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
+- Theoretical role change: ingestion writes both canonical text and multimodal dense retrieval signals.
+- Technical/practical change: computes and persists `text_dense` + `mm_dense` vectors per chunk when supported, with backward-compatible fallback to single-vector upsert; video ingestion can optionally append local ASR transcript evidence with timestamps.
+
+`app/rag/retriever.py`
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
+- Theoretical role change: retrieval becomes dual-dense-branch (text + multimodal) plus lexical fusion.
+- Technical/practical change: queries named vectors (`text_dense`, `mm_dense`), applies RRF fusion, and keeps reranker stage on fused candidates.
+
+`app/rag/reranker.py`
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
+- Theoretical role change: reranker abstraction now supports local OpenAI-compatible LLM reranking in addition to lexical and cross-encoder paths.
+- Technical/practical change: adds `openai` provider wiring (`OpenAILLMReranker`) for container-backed reranking over candidate pools.
+
+`app/storage/qdrant_store.py`
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
+- Theoretical role change: external vector-store adapter now supports modality-aware named vector routing.
+- Technical/practical change: adds named-vector collection bootstrap, named upsert/search APIs, and graceful fallback when collection is single-vector.
+
+`app/storage/pgvector_store.py`
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
+- Theoretical role change: local/postgres adapter now preserves named-vector semantics in memory fallback path.
+- Technical/practical change: stores per-row named vectors for in-memory mode and exposes named upsert/search compatibility methods.
+
+`app/storage/fallback_vector_store.py`
+- Milestone metadata: introduced `M1`; updated `M5.3`; status `implemented`.
+- Theoretical role change: fallback adapter arbitrates both single-vector and named-vector operations.
+- Technical/practical change: adds named upsert/search routing with primary/secondary fallback behavior.
+
+`app/core/config.py`
+- Milestone metadata: introduced `M0`; updated `M5.3`; status `implemented`.
+- Theoretical role change: configuration surface now includes multimodal embedding and named-vector retrieval controls.
+- Technical/practical change: adds `MMAA_RAG_MULTIMODAL_*`, vector-name settings for provider/model/dimensions/branch-fusion behavior, and optional video-audio transcription knobs (`MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_*`).
+
+`app/core/dependencies.py`
+- Milestone metadata: introduced `M0`; updated `M5.3`; status `implemented`.
+- Theoretical role change: service composition now wires both text and multimodal embedding providers.
+- Technical/practical change: builds multimodal embedding client, configures named-vector-aware stores, and injects dual-branch retriever/ingestion settings.
+
+`tests/test_m53_multimodal_stack.py`
+- Milestone metadata: introduced `M5.3`; status `implemented`.
+- Theoretical role: milestone regression guard for multimodal embedding stack behavior.
+- Technical/practical role: validates multimodal ingest/search parity, cross-modal retrieval, reranker lift on fused candidates, and Qdrant named-vector routing contract.
+
+`tests/test_m53_openai_reranker.py`
+- Milestone metadata: introduced `M5.3`; status `implemented`.
+- Theoretical role: regression guard for OpenAI-compatible reranker provider behavior.
+- Technical/practical role: validates credential guardrails and LLM-ranked candidate ordering behavior.
+
+## 13. M6 - Evaluation and Deployment (Planned)
 
 `evaluation/runner.py`
 - Milestone metadata: introduced `M6`; status `planned`.
@@ -725,7 +792,7 @@ Keep file-level architecture traceability in one place, separated by milestone, 
 - Theoretical role: local deployment topology artifact.
 - Technical/practical role: composes service and infrastructure for reproducible runs.
 
-## 13. Update Protocol
+## 14. Update Protocol
 - Add each new file under the milestone where it is first introduced.
 - When behavior changes materially, update the file's milestone metadata and description.
 - Keep `docs/03-didactic-traceability.md` focused on decisions and learning rationale; keep file mapping in this document.

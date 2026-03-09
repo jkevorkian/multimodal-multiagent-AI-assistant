@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     Provider options by field:
     - rag_vector_store_provider: pgvector | qdrant | auto
     - rag_embedding_provider: deterministic | openai | sentence_transformers | auto | neural
-    - rag_reranker_provider: lexical | cross_encoder
+    - rag_multimodal_embedding_provider: deterministic | openai | qwen3_vl | auto | neural
+    - rag_reranker_provider: lexical | cross_encoder | openai | qwen3_vl
     - llm_provider: auto | heuristic | deterministic | fallback | openai
     - multimodal_provider: auto | heuristic | fallback | openai
     """
@@ -59,6 +60,16 @@ class Settings(BaseSettings):
     rag_openai_base_url: str | None = None
     rag_embedding_dimensions: int = 64
     rag_requested_embedding_dimensions: int | None = None
+    rag_multimodal_enabled: bool = True
+    rag_multimodal_embedding_provider: str = "deterministic"
+    rag_multimodal_embedding_model: str = "Qwen/Qwen3-VL-Embedding-2B"
+    rag_multimodal_openai_api_key: str | None = None
+    rag_multimodal_openai_base_url: str | None = None
+    rag_multimodal_embedding_endpoint: str = "/embeddings"
+    rag_multimodal_embedding_dimensions: int = 64
+    rag_text_vector_name: str = "text_dense"
+    rag_multimodal_vector_name: str = "mm_dense"
+    rag_multimodal_fuse_text_dense: bool = True
     rag_chunk_size: int = 2500
     rag_chunk_overlap: int = 120
     rag_max_source_bytes: int = 2_000_000
@@ -71,6 +82,9 @@ class Settings(BaseSettings):
     rag_reranker_enabled: bool = True
     rag_reranker_provider: str = "lexical"
     rag_reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rag_reranker_openai_api_key: str | None = None
+    rag_reranker_openai_base_url: str | None = None
+    rag_reranker_qwen3_vl_endpoint: str = "/rerank"
 
     # LLM generation provider and decoding controls.
     llm_provider: str = "auto"
@@ -94,6 +108,11 @@ class Settings(BaseSettings):
     multimodal_video_remote_fetch_timeout_sec: float = 20.0
     multimodal_video_max_remote_source_bytes: int = 120_000_000
     multimodal_video_require_frame_findings: bool = True
+    multimodal_video_ingest_enrich_with_analysis: bool = False
+    multimodal_video_audio_transcription_enabled: bool = False
+    multimodal_video_audio_transcription_model: str = "tiny"
+    multimodal_video_audio_transcription_language: str | None = None
+    multimodal_video_audio_transcription_max_segments: int = 120
     vision_max_source_bytes: int = 5_000_000
 
     # Agent orchestration guardrails.

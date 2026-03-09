@@ -6,13 +6,15 @@ Multimodal assistant with:
 - Vision and video endpoints
 - Streamlit frontend for end-to-end usage
 
-Current delivery status (2026-03-08):
+Current delivery status (2026-03-09):
 - M0-M3 complete and consolidated.
 - M4.1 complete: video path now supports strict frame decode + per-frame VLM analysis + temporal aggregation, while preserving API contracts.
 - M2.3 complete: live runtime status telemetry + bounded revision orchestration (`/runs/{run_id}/events`, `/runs/{run_id}/status`).
 - M2.4 complete: durable chat sessions (multi-chat history), chat-scoped file/context storage, and transcript-grade runtime timeline.
 - M5.1 complete: context compaction slice (checkpoint schema + compactor + orchestrator guard + tests).
 - M5.2 complete: steering controls (profiles + grounding/tool policy enforcement).
+- M5.3 complete: multimodal embedding/reranking stack with named vectors (`text_dense`/`mm_dense`) and true VL provider wiring.
+- Video ingestion can index timestamped speech transcript evidence via local Whisper ASR (`MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_*`).
 - Frontend chat workspace now uses backend-persisted sessions and run transcripts.
 
 ## Stack
@@ -38,6 +40,10 @@ Optional for M4.1 local decoded-frame extraction:
 ```powershell
 pip install opencv-python
 ```
+
+Optional for video-audio transcript indexing during ingestion:
+- `ffmpeg` available in `PATH`
+- local Whisper model download on first run (package already in `requirements.txt`)
 
 ## 3. Create `.env`
 ```powershell
@@ -166,3 +172,4 @@ docker compose -f deployment/docker-compose.qdrant.yml down -v
 - Local vision with `file://` image paths is supported by the multimodal adapter.
 - Vision preprocessing can resolve webpage URLs to concrete image assets before model inference.
 - Video analysis uses strict decode-based frame extraction (`cv2` required) and fails explicitly if decode cannot run.
+- Video ingestion can append timestamped audio transcripts (Whisper) so spoken content is retrievable in RAG.

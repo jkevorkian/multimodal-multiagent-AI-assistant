@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import html
+import importlib.util
 import io
 import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 from app.interfaces.embedding import EmbeddingClient
+from app.interfaces.multimodal_embedding import MultimodalEmbeddingClient, MultimodalEmbeddingInput
 from app.interfaces.vector_store import VectorStore
 from app.interfaces.video import VideoClient
 from app.interfaces.vision import VisionClient
@@ -57,13 +62,19 @@ class IngestionSummary:
 
 
 class DocumentIngestionService:
+    _whisper_model_cache: dict[str, Any] = {}
+    _whisper_model_lock: Lock = Lock()
+
     def __init__(
         self,
         embedding_client: EmbeddingClient,
         vector_store: VectorStore,
+        multimodal_embedding_client: MultimodalEmbeddingClient | None = None,
         chunk_size: int = 700,
         chunk_overlap: int = 120,
         max_source_bytes: int = 2_000_000,
+        text_vector_name: str = "text_dense",
+        multimodal_vector_name: str = "mm_dense",
         vision_client: VisionClient | None = None,
         video_client: VideoClient | None = None,
         video_sample_fps: float = 1.0,
@@ -75,12 +86,20 @@ class DocumentIngestionService:
         video_remote_fetch_timeout_sec: float = 20.0,
         video_max_remote_source_bytes: int = 120_000_000,
         video_require_frame_findings: bool = True,
+        video_ingest_enrich_with_analysis: bool = False,
+        video_audio_transcription_enabled: bool = False,
+        video_audio_transcription_model: str = "tiny",
+        video_audio_transcription_language: str | None = None,
+        video_audio_transcription_max_segments: int = 120,
     ) -> None:
         self._embedding_client = embedding_client
+        self._multimodal_embedding_client = multimodal_embedding_client
         self._vector_store = vector_store
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
         self._max_source_bytes = max_source_bytes
+        self._text_vector_name = text_vector_name
+        self._multimodal_vector_name = multimodal_vector_name
         self._vision_client = vision_client
         self._video_client = video_client
         self._video_sample_fps = video_sample_fps
@@ -92,6 +111,13 @@ class DocumentIngestionService:
         self._video_remote_fetch_timeout_sec = video_remote_fetch_timeout_sec
         self._video_max_remote_source_bytes = video_max_remote_source_bytes
         self._video_require_frame_findings = video_require_frame_findings
+        self._video_ingest_enrich_with_analysis = video_ingest_enrich_with_analysis
+        self._video_audio_transcription_enabled = video_audio_transcription_enabled
+        self._video_audio_transcription_model = video_audio_transcription_model.strip() or "tiny"
+        self._video_audio_transcription_language = (
+            video_audio_transcription_language.strip() if video_audio_transcription_language else None
+        )
+        self._video_audio_transcription_max_segments = max(1, video_audio_transcription_max_segments)
 
     async def ingest(
         self,
@@ -100,7 +126,8 @@ class DocumentIngestionService:
         metadata_overrides: dict[str, Any] | None = None,
     ) -> IngestionSummary:
         ids: list[str] = []
-        vectors: list[list[float]] = []
+        text_vectors: list[list[float]] = []
+        multimodal_vectors: list[list[float]] = []
         metadata: list[dict] = []
         accepted_sources = 0
         safe_metadata_overrides = dict(metadata_overrides or {})
@@ -121,12 +148,26 @@ class DocumentIngestionService:
                 continue
 
             accepted_sources += 1
-            vectors_for_chunks = await self._embedding_client.embed_texts([chunk.text for chunk in chunks])
-            if len(vectors_for_chunks) != len(chunks):
+            text_vectors_for_chunks = await self._embedding_client.embed_texts([chunk.text for chunk in chunks])
+            if len(text_vectors_for_chunks) != len(chunks):
                 raise ValueError("embedding provider returned mismatched batch size")
-            for chunk, vector in zip(chunks, vectors_for_chunks, strict=True):
+            mm_vectors_for_chunks = text_vectors_for_chunks
+            if self._multimodal_embedding_client is not None:
+                try:
+                    mm_inputs = [
+                        MultimodalEmbeddingInput(modality=modality, text=chunk.text, source_uri=chunk.source)
+                        for chunk in chunks
+                    ]
+                    candidate_mm_vectors = await self._multimodal_embedding_client.embed(mm_inputs)
+                    if len(candidate_mm_vectors) == len(chunks):
+                        mm_vectors_for_chunks = candidate_mm_vectors
+                except Exception:
+                    mm_vectors_for_chunks = text_vectors_for_chunks
+
+            for chunk, text_vector, mm_vector in zip(chunks, text_vectors_for_chunks, mm_vectors_for_chunks, strict=True):
                 ids.append(chunk.id)
-                vectors.append(vector)
+                text_vectors.append(text_vector)
+                multimodal_vectors.append(mm_vector)
                 metadata.append(
                     {
                         "source": chunk.source,
@@ -139,7 +180,21 @@ class DocumentIngestionService:
                 )
 
         if ids:
-            await self._vector_store.upsert(ids=ids, vectors=vectors, metadata=metadata)
+            named_vectors = {
+                self._text_vector_name: text_vectors,
+                self._multimodal_vector_name: multimodal_vectors,
+            }
+            try:
+                if hasattr(self._vector_store, "upsert_named"):
+                    await self._vector_store.upsert_named(  # type: ignore[attr-defined]
+                        ids=ids,
+                        vectors_by_name=named_vectors,
+                        metadata=metadata,
+                    )
+                else:
+                    await self._vector_store.upsert(ids=ids, vectors=text_vectors, metadata=metadata)
+            except Exception:
+                await self._vector_store.upsert(ids=ids, vectors=text_vectors, metadata=metadata)
 
         return IngestionSummary(accepted_sources=accepted_sources, indexed_chunks=len(ids))
 
@@ -147,7 +202,7 @@ class DocumentIngestionService:
         if modality == "image":
             return await self._analyze_image_source(source)
         if modality == "video":
-            return await self._analyze_video_source(source)
+            return await self._build_video_source_representation(source)
         return self._load_source_text(source, source_type)
 
     def _load_source_text(self, source: str, source_type: str) -> str:
@@ -207,6 +262,113 @@ class DocumentIngestionService:
             f"Processed frames: {analysis.processed_frames}\n"
             f"Confidence: {analysis.confidence:.2f}"
         )
+
+    async def _build_video_source_representation(self, source: str) -> str:
+        # Default strategy: keep ingestion robust by indexing direct-video embeddings
+        # and enriching text evidence with speech/frame descriptors when available.
+        sections = [f"Video source: {source}", "Indexing mode: direct_vl_embedding"]
+
+        transcript = await self._transcribe_video_audio_source(source)
+        if transcript:
+            sections.append(f"Audio transcript:\n{transcript}")
+        elif self._video_audio_transcription_enabled:
+            sections.append("Audio transcript: unavailable during ingestion.")
+        else:
+            sections.append("Audio transcript: disabled.")
+
+        if not self._video_ingest_enrich_with_analysis:
+            sections.append("Frame analysis: skipped during ingestion.")
+            return "\n".join(sections)
+
+        try:
+            analyzed = await self._analyze_video_source(source)
+        except Exception:
+            sections.append("Frame analysis: unavailable during ingestion.")
+            return "\n".join(sections)
+
+        normalized = " ".join(analyzed.split()).strip()
+        if not normalized or normalized == f"Video source: {source}":
+            sections.append("Frame analysis: unavailable during ingestion.")
+            return "\n".join(sections)
+        sections.append(f"Enrichment:\n{analyzed}")
+        return "\n".join(sections)
+
+    async def _transcribe_video_audio_source(self, source: str) -> str | None:
+        if not self._video_audio_transcription_enabled:
+            return None
+
+        local_path = self._resolve_local_media_path(source)
+        if local_path is None or not local_path.exists() or not local_path.is_file():
+            return None
+
+        try:
+            transcript = await asyncio.to_thread(self._transcribe_video_audio_sync, local_path)
+        except Exception:
+            return None
+        normalized = transcript.strip() if transcript else ""
+        return normalized or None
+
+    def _transcribe_video_audio_sync(self, local_path: Path) -> str | None:
+        if importlib.util.find_spec("whisper") is None:
+            return None
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            model = self._load_whisper_model(self._video_audio_transcription_model)
+            options: dict[str, Any] = {"task": "transcribe", "verbose": False}
+            if self._video_audio_transcription_language:
+                options["language"] = self._video_audio_transcription_language
+            result = model.transcribe(str(local_path), **options)
+        if not isinstance(result, dict):
+            return None
+
+        segments = result.get("segments")
+        if isinstance(segments, list):
+            lines: list[str] = []
+            for segment in segments:
+                if len(lines) >= self._video_audio_transcription_max_segments:
+                    break
+                if not isinstance(segment, dict):
+                    continue
+                text = self._normalize_whitespace(str(segment.get("text", "")))
+                if not text:
+                    continue
+                try:
+                    start_sec = float(segment.get("start", 0.0))
+                except (TypeError, ValueError):
+                    start_sec = 0.0
+                lines.append(f"[t={max(0.0, start_sec):.1f}s] {text}")
+            if lines:
+                return "\n".join(lines)
+
+        transcript_text = self._normalize_whitespace(str(result.get("text", "")))
+        return transcript_text or None
+
+    @classmethod
+    def _load_whisper_model(cls, model_name: str):
+        cached = cls._whisper_model_cache.get(model_name)
+        if cached is not None:
+            return cached
+        import whisper
+
+        with cls._whisper_model_lock:
+            cached = cls._whisper_model_cache.get(model_name)
+            if cached is not None:
+                return cached
+            model = whisper.load_model(model_name)
+            cls._whisper_model_cache[model_name] = model
+            return model
+
+    @staticmethod
+    def _resolve_local_media_path(source: str) -> Path | None:
+        parsed = urlparse(source)
+        if parsed.scheme in {"http", "https", "s3"}:
+            return None
+        if parsed.scheme == "file":
+            path_value = unquote(parsed.path)
+            if re.match(r"^/[A-Za-z]:/", path_value):
+                path_value = path_value[1:]
+            return Path(path_value)
+        return Path(source)
 
     def _resolve_modality(self, source: str, source_type: str) -> str:
         normalized_source_type = source_type.strip().lower()

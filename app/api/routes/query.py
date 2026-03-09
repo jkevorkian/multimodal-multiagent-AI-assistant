@@ -43,6 +43,40 @@ def _fallback_answer_from_snippets(snippets: list[str]) -> str:
     )
 
 
+def _to_retrieved_chunks(context: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for item in context:
+        source = str(item.get("source", "unknown"))
+        snippet = str(item.get("snippet", ""))
+        modality = str(item.get("modality", "text"))
+        try:
+            chunk_id = int(item.get("chunk_id", -1))
+        except (TypeError, ValueError):
+            chunk_id = -1
+        try:
+            offset = int(item.get("offset", -1))
+        except (TypeError, ValueError):
+            offset = -1
+        try:
+            score = float(item.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        row = {
+            "source": source,
+            "chunk_id": chunk_id,
+            "offset": offset,
+            "snippet": snippet,
+            "score": score,
+            "modality": modality,
+        }
+        if item.get("timestamp_sec") is not None:
+            row["timestamp_sec"] = item.get("timestamp_sec")
+        if item.get("frame_index") is not None:
+            row["frame_index"] = item.get("frame_index")
+        rows.append(row)
+    return rows
+
+
 @router.post("/query", response_model=QueryResponse)
 async def query(
     payload: QueryRequest,
@@ -93,6 +127,7 @@ async def query(
     return QueryResponse(
         answer=answer,
         citations=citations,
+        retrieved_chunks=_to_retrieved_chunks(context),
         confidence=confidence,
         steering_applied=steering_applied,
         trace=Trace(request_id=request.state.request_id, trace_id=request.state.trace_id),

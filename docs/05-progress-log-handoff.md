@@ -1,12 +1,12 @@
 # 05 - Progress Log Handoff
 
 ## 1. Snapshot
-- Date: 2026-03-08
+- Date: 2026-03-09
 - Branch: `main`
-- Current HEAD: working tree includes M2.4 implementation slice (persistent chat + scoped retrieval + transcript enrichment)
+- Current HEAD: working tree includes M5.3 completion slice (named-vector multimodal retrieval + true VL provider wiring + video audio transcript indexing)
 - Working tree status: implementation and docs updates pending commit
 - Last full test run:
-  - `.\venv\Scripts\python.exe -m pytest -q` -> `81 passed`
+  - `.\venv\Scripts\python.exe -m pytest -q tests/test_m53_multimodal_stack.py tests/test_m53_true_vl_clients.py tests/test_m53_openai_reranker.py tests/test_llm_and_multimodal_ingestion.py` -> `23 passed`
 
 ## 2. Milestone Status
 - M0: complete.
@@ -17,10 +17,10 @@
 - M2.4: complete (durable multi-chat sessions + chat-scoped retrieval + transcript-grade runtime timeline).
 - M3: complete and extended (vision preprocess/adapter/fusion + webpage image resolution).
 - M4.1: complete.
-- M5: planned.
-- M5.1 (context compaction): in progress (vertical slice implemented).
-- M5.2 (steering controls): in progress (baseline implemented).
-- M5.3 (multimodal embeddings stack): planned.
+- M5: baseline hardening slices in progress.
+- M5.1 (context compaction): complete.
+- M5.2 (steering controls): complete.
+- M5.3 (multimodal embeddings stack): complete.
 - M6+: planned.
 
 ## 3. Delivered Since Previous Handoff
@@ -163,6 +163,6 @@
 - Full-suite benchmark/eval artifacts remain M6 scope.
 
 ## 7. Suggested Immediate Next Step
-1. Start M5.3 (multimodal embedding stack) in a separate branch with named-vector contract and adapter tests.
+1. Start M6 retrieval/generation benchmark harness and define gold dataset slices for text/image/video grounded QA.
 2. Define migration strategy for chat store from SQLite to Postgres for multi-user deployment.
 3. Add pagination/retention controls for long chat transcripts and runtime events.

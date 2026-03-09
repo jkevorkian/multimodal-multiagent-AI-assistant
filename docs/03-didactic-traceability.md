@@ -21,6 +21,7 @@ This document explains learning intent and technical reasoning during implementa
 | M4 | Video path | Frame sampling, temporal aggregation, budget-aware processing | Video pipeline utilities |
 | M5.1 | Context compaction | Token-budget control, state summarization, memory safety invariants | Session/context manager patterns, summary checkpoints |
 | M5.2 | Steering controls | Policy layering, response-style control, tool/citation constraints | Request policy models, runtime guardrails |
+| M5.3 | Multimodal embedding stack | Shared cross-modal vector spaces, named-vector retrieval, dual-branch dense fusion | Multimodal embedding adapters, Qdrant named vectors, hybrid dense+lexical retrieval |
 | M5 | Hardening | Retry strategy, caching layers, model routing, error taxonomy | Async IO, resilient API patterns |
 | M6 | Evaluation + deploy | Metric design, retrieval/generation evaluation, reproducibility, containerization | Benchmark runners, Docker, retrieval/grounding metrics |
 
@@ -174,11 +175,11 @@ A staged video pipeline gives direct control over compute budget and output qual
 
 ### M4 implementation notes
 - Video path now uses explicit modules: `VideoFrameSampler` -> `TemporalAggregator` -> `VideoAnalysisAdapter`.
-- Sampling supports local decode-based frame extraction (optional `cv2`) and keeps deterministic heuristic fallback.
+- Sampling uses local decode-based frame extraction (`cv2`) when enabled and keeps deterministic fallback behavior elsewhere.
 - Adapter-level flow now supports per-frame VLM analysis before temporal aggregation.
 - Route output includes timeline-oriented key events with explicit time/source evidence tags.
 - Existing API contract is preserved (`summary`, `key_events`, `confidence`, `processed_frames`, `trace`).
-- Ingestion now reuses the same video adapter path so timeline evidence is indexed in shared RAG.
+- Ingestion now defaults to VL-first video indexing (direct `video_url` embedding), with adapter-based frame/timeline enrichment available via config.
 
 ## M5 - Hardening
 ### How it works
@@ -201,6 +202,13 @@ Composable middleware-style utilities keep resilience logic centralized and test
 - Apply steering to answer style, tool policy, and grounding strictness.
 - Emit steering profile and enforcement notes in traces for observability.
 - Current status (2026-03-08): baseline implemented with route-level steering schema, profile resolution, tool policy application, grounding abstention, and regression tests.
+
+### M5.3 multimodal embedding stack
+- Add a dedicated multimodal embedding abstraction and provider selection layer so text/image/video evidence can be projected into one retrieval space.
+- Persist dual dense signals per chunk (`text_dense`, `mm_dense`) using named vectors where supported.
+- Query multimodal dense branch first, optionally fuse with text-dense + lexical branches, then rerank.
+- Support true VL providers (`qwen3_vl`) for multimodal embedding/reranking with image/video-aware request payloads.
+- Current status (2026-03-09): implemented with named-vector ingestion/retrieval wiring, Qdrant named-vector routing, deterministic fallback path, true VL embedding/reranker path, and regression tests for cross-modal retrieval behavior.
 
 ## M6 - Evaluation + Deploy
 ### How it works
@@ -437,6 +445,16 @@ Use this entry template for every major decision:
 - Fix: sampler now attempts real local frame decode and adapter performs per-frame VLM analysis before temporal aggregation.
 - Verification: M4 tests validate decoded-frame path behavior, frame-level finding integration, budget constraints, and timeline evidence fields.
 
+### What Changed in Understanding (M5.3)
+- One shared retrieval corpus does not require one single signal; dual dense branches (`text_dense` + `mm_dense`) improve controllability while preserving backward compatibility.
+- Named-vector routing allows modality-aware retrieval without splitting collections by modality, which keeps chat-scoped metadata filtering intact.
+- Multimodal embedding rollout is safest when deterministic fallback remains first-class for local/test environments.
+
+### What Failed and How It Was Fixed (M5.3)
+- Failure: single-vector upsert/search contracts could not represent separate text and multimodal dense signals.
+- Fix: introduced named-vector methods (`upsert_named`, `search_named`) across vector-store adapters with compatibility fallbacks to legacy single-vector paths.
+- Verification: `tests/test_m53_multimodal_stack.py` validates named-vector ingest routing, cross-modal retrieval behavior, reranker lift, and Qdrant vector-name contract usage.
+
 - Date: 2026-03-06
 - Milestone: M4
 - Context: video endpoint lacked explicit temporal pipeline modules and budget-aware frame controls.
@@ -455,7 +473,7 @@ Use this entry template for every major decision:
 - Alternatives considered: keep summary-only aggregation, switch to heavy always-on ffmpeg/cv stack.
 - Why chosen: improves evidence quality now while preserving lightweight local compatibility.
 - Expected impact: stronger temporal grounding and more robust video evidence in both endpoint and ingestion.
-- Observed outcome: `/video/analyze` and ingestion now reuse adapter-based frame-evidence pipeline; full test suite remains green.
+- Observed outcome: `/video/analyze` uses the adapter-based frame-evidence pipeline; ingestion keeps a VL-first default with optional enrichment; full test suite remains green.
 - Would we choose it again?: yes.
 - Affected modules: `app/video/frame_sampler.py`, `app/video/adapter.py`, `app/video/temporal_aggregator.py`, `app/rag/ingestion.py`, `tests/test_m4_video.py`.
 
@@ -513,6 +531,17 @@ Use this entry template for every major decision:
 - Observed outcome: roadmap + frontend architecture now include event taxonomy and revision-loop guardrail design surfaces.
 - Would we choose it again?: yes.
 - Affected modules: `docs/02-implementation-roadmap.md`, `docs/03-didactic-traceability.md`, `frontend/architecture.py`, `frontend/streamlit_app.py`, `tests/test_frontend_architecture.py`.
+
+- Date: 2026-03-09
+- Milestone: M5.3
+- Context: retrieval stack needed one query path over mixed text/image/video evidence without splitting modality indexes.
+- Decision: implement dual dense named vectors (`text_dense`, `mm_dense`) plus multimodal embedding abstraction and keep lexical branch + reranker in the same retriever pipeline.
+- Alternatives considered: modality-specific collections only, single mixed vector only, postpone named-vector support until M6.
+- Why chosen: dual-branch retrieval improves cross-modal recall while preserving compatibility with current contracts and chat-scoped metadata filters.
+- Expected impact: better multimodal retrieval precision with minimal API changes.
+- Observed outcome: ingestion writes named vectors when available, retriever queries multimodal/text dense branches with RRF fusion, true VL embedding/reranking providers are wired via `qwen3_vl`, optional local Whisper-based video audio transcription produces timestamped speech evidence for RAG chunks, and new M5.3 regression tests pass.
+- Would we choose it again?: yes.
+- Affected modules: `app/interfaces/multimodal_embedding.py`, `app/rag/multimodal_embeddings.py`, `app/interfaces/vector_store.py`, `app/rag/ingestion.py`, `app/rag/retriever.py`, `app/rag/reranker.py`, `app/storage/qdrant_store.py`, `app/storage/pgvector_store.py`, `app/storage/fallback_vector_store.py`, `app/core/config.py`, `app/core/dependencies.py`, `tests/test_m53_multimodal_stack.py`, `tests/test_m53_openai_reranker.py`.
 
 ### What Changed in Understanding (M2.2)
 - A lightweight frontend can be introduced without violating milestone isolation if it only consumes stable backend contracts.

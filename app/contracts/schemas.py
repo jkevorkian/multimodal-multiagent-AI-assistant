@@ -56,9 +56,21 @@ class QueryRequest(BaseModel):
     metadata_filter: dict[str, Any] | None = None
 
 
+class RetrievedChunk(BaseModel):
+    source: str
+    chunk_id: int = -1
+    offset: int = -1
+    snippet: str = ""
+    score: float = 0.0
+    modality: str = "text"
+    timestamp_sec: float | None = None
+    frame_index: int | None = None
+
+
 class QueryResponse(BaseModel):
     answer: str
     citations: list[str]
+    retrieved_chunks: list[RetrievedChunk] = Field(default_factory=list)
     confidence: float
     steering_applied: SteeringApplied | None = None
     trace: Trace
@@ -77,6 +89,8 @@ class AgentRunResponse(BaseModel):
     answer: str
     steps: list[str]
     tool_calls: list[str]
+    citations: list[str] = Field(default_factory=list)
+    retrieved_chunks: list[RetrievedChunk] = Field(default_factory=list)
     confidence: float
     steering_applied: SteeringApplied | None = None
     trace: Trace

@@ -257,6 +257,7 @@ def test_image_and_video_are_ingested_with_modality_metadata(monkeypatch, tmp_pa
         vector_store=store,
         vision_client=_VisionStub(),  # type: ignore[arg-type]
         video_client=_VideoStub(),  # type: ignore[arg-type]
+        video_ingest_enrich_with_analysis=True,
         chunk_size=120,
         chunk_overlap=20,
     )
@@ -274,3 +275,30 @@ def test_image_and_video_are_ingested_with_modality_metadata(monkeypatch, tmp_pa
     assert any("vision-summary" in row["metadata"].get("snippet", "") for row in store.rows)
     assert any("Key events:" in row["metadata"].get("snippet", "") for row in store.rows)
     assert any("[t=" in row["metadata"].get("snippet", "") for row in store.rows)
+
+
+def test_video_ingestion_can_include_audio_transcript_text(monkeypatch, tmp_path) -> None:
+    video_path = tmp_path / "speech.mp4"
+    video_path.write_bytes(b"fake-video")
+
+    async def _fake_transcribe(self, source: str) -> str | None:  # noqa: ARG001
+        return "[t=0.0s] i do not like tacos."
+
+    monkeypatch.setattr(DocumentIngestionService, "_transcribe_video_audio_source", _fake_transcribe)
+
+    store = _VectorStoreRecorder()
+    embeddings = build_embedding_client(provider="deterministic", deterministic_dimensions=16).client
+    ingestion = DocumentIngestionService(
+        embedding_client=embeddings,
+        vector_store=store,
+        video_audio_transcription_enabled=True,
+        chunk_size=180,
+        chunk_overlap=20,
+    )
+    summary = asyncio.run(ingestion.ingest(sources=[video_path.as_uri()], source_type="mixed"))
+
+    assert summary.accepted_sources == 1
+    assert summary.indexed_chunks >= 1
+    snippets = [str(row["metadata"].get("snippet", "")).lower() for row in store.rows]
+    assert any("audio transcript" in snippet for snippet in snippets)
+    assert any("do not like tacos" in snippet for snippet in snippets)

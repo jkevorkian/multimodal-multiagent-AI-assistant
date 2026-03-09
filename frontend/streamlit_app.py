@@ -295,6 +295,37 @@ def _render_answer_block(title: str, payload: dict[str, Any] | list[Any] | str) 
         st.markdown("**Citations**")
         for citation in payload["citations"]:
             st.markdown(f"- `{citation}`")
+    retrieved_chunks = payload.get("retrieved_chunks")
+    if isinstance(retrieved_chunks, list) and retrieved_chunks:
+        display_rows: list[dict[str, Any]] = []
+        for item in retrieved_chunks:
+            if not isinstance(item, dict):
+                continue
+            try:
+                chunk_id = int(item.get("chunk_id", -1))
+            except (TypeError, ValueError):
+                chunk_id = -1
+            try:
+                offset = int(item.get("offset", -1))
+            except (TypeError, ValueError):
+                offset = -1
+            try:
+                score = round(float(item.get("score", 0.0)), 4)
+            except (TypeError, ValueError):
+                score = 0.0
+            display_rows.append(
+                {
+                    "source": str(item.get("source", "unknown")),
+                    "modality": str(item.get("modality", "text")),
+                    "chunk_id": chunk_id,
+                    "offset": offset,
+                    "score": score,
+                    "snippet": str(item.get("snippet", "")),
+                }
+            )
+        if display_rows:
+            st.markdown("**Retrieved RAG Chunks**")
+            st.dataframe(display_rows, hide_index=True, use_container_width=True)
     if payload.get("findings"):
         st.markdown("**Findings**")
         for finding in payload["findings"]:
@@ -557,7 +588,7 @@ def _render_agents_runtime_live_helper(backend_url: str) -> None:
 def _ensure_chat_state() -> None:
     st.session_state.setdefault("chat_selected_id", "")
     st.session_state.setdefault("chat_upload_nonce", 0)
-    st.session_state.setdefault("chat_sources_text", "")
+    st.session_state.setdefault("chat_sources_nonce", 0)
     st.session_state.setdefault("chat_include_archived", False)
 
 
@@ -848,12 +879,11 @@ def main() -> None:
         controls_left, controls_right = st.columns([1.2, 1.8])
         with controls_left:
             st.markdown("### Sessions")
-            st.session_state["chat_include_archived"] = st.checkbox(
+            include_archived = st.checkbox(
                 "Show archived",
-                value=bool(st.session_state.get("chat_include_archived", False)),
                 key="chat_include_archived",
             )
-            sessions = _fetch_chat_sessions(backend_url, include_archived=bool(st.session_state["chat_include_archived"]))
+            sessions = _fetch_chat_sessions(backend_url, include_archived=bool(include_archived))
             if not sessions:
                 st.info("No chat sessions found yet.")
             session_ids = [str(item.get("chat_id", "")) for item in sessions]
@@ -954,10 +984,10 @@ def main() -> None:
                 key="chat_tools",
             )
 
+            sources_nonce = int(st.session_state.get("chat_sources_nonce", 0))
             chat_sources_text = st.text_area(
                 "Additional sources for this turn (one URI/path per line, optional)",
-                value=st.session_state.get("chat_sources_text", ""),
-                key="chat_sources_text",
+                key=f"chat_sources_text_{sources_nonce}",
                 height=90,
             )
             upload_nonce = int(st.session_state.get("chat_upload_nonce", 0))
@@ -1022,10 +1052,10 @@ def main() -> None:
                     if not (200 <= status_code < 300):
                         _render_response(status_code, body)
 
-                    st.session_state["chat_sources_text"] = ""
                     st.session_state["chat_clipboard_sources"] = []
                     st.session_state["chat_clipboard_digest"] = ""
                     st.session_state["chat_upload_nonce"] = upload_nonce + 1
+                    st.session_state["chat_sources_nonce"] = sources_nonce + 1
                     st.rerun()
 
     with health_tab:

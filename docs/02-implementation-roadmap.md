@@ -374,7 +374,7 @@ Add video understanding with frame sampling + temporal aggregation and retrieval
   - `VideoAnalysisAdapter` now orchestrates per-frame vision analysis plus provider-level video summary.
   - `TemporalAggregator` now composes events from frame-level findings and prioritizes those findings for top-level summary.
   - `/video/analyze` preserves response contract while emitting timeline-evidenced key events (`[t=...s][source=...]`) and budget-aware `processed_frames`.
-  - Multimodal ingestion now uses the same video adapter path so video evidence is indexed in the shared RAG structure.
+  - Multimodal ingestion now supports a configurable strategy: default VL-first video indexing (direct `video_url` embedding) with optional frame-analysis enrichment when enabled.
 
 ## M5 - Production Hardening
 ### Objective
@@ -524,6 +524,17 @@ Store and retrieve text, image, screenshot, and video evidence in a shared multi
 - One query path can retrieve mixed-modal evidence from one collection.
 - Reranking consistently improves retrieval relevance on multimodal test sets.
 - Existing `/query`, `/vision/analyze`, `/video/analyze` contracts remain backward compatible.
+
+### Implementation Status
+- Current branch status (2026-03-09): implemented in current working tree.
+- Delivered in this slice:
+  - Added multimodal embedding abstraction (`app/interfaces/multimodal_embedding.py`) and provider builder (`app/rag/multimodal_embeddings.py`) with deterministic fallback plus true VL provider wiring (`qwen3_vl`) for image/video-aware embedding payloads.
+  - Reworked ingest/retrieval path to write/query dual dense vectors (`text_dense`, `mm_dense`) through named-vector-capable stores while preserving backward-compatible fallback behavior.
+  - Added true VL reranker provider path (`qwen3_vl`) for multimodal query-document reranking, plus OpenAI-compatible LLM reranker fallback profile.
+  - Updated video ingestion policy to favor direct VL embeddings first; frame/timeline analysis is now optional enrichment (`MMAA_MULTIMODAL_VIDEO_INGEST_ENRICH_WITH_ANALYSIS`).
+  - Added optional local video-audio transcription during ingestion (Whisper + ffmpeg) so spoken content is indexed as timestamped retrieval evidence (`MMAA_MULTIMODAL_VIDEO_AUDIO_TRANSCRIPTION_*`).
+  - Extended Qdrant adapter with named vector upsert/search routing and collection bootstrap support for text+multimodal vector fields.
+  - Added M5.3 regression suites (`tests/test_m53_multimodal_stack.py`, `tests/test_m53_openai_reranker.py`) covering ingest/search parity, cross-modal retrieval, reranker lift, named-vector routing, and OpenAI-compatible reranker behavior.
 
 ## M6 - Evaluation and Deployment
 ### Objective

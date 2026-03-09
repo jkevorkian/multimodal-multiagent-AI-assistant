@@ -18,10 +18,26 @@ from app.agents.context_manager import AgentContextManager
 from app.core.config import settings
 from app.core.context_compaction import ContextCompactor
 from app.core.event_bus import InMemoryEventBus, get_event_bus
-from app.interfaces import EmbeddingClient, LLMClient, Reranker, Retriever, Tool, VectorStore, VideoClient, VisionClient
+from app.interfaces import (
+    EmbeddingClient,
+    LLMClient,
+    MultimodalEmbeddingClient,
+    Reranker,
+    Retriever,
+    Tool,
+    VectorStore,
+    VideoClient,
+    VisionClient,
+)
 from app.llm import build_llm_client
 from app.multimodal import build_multimodal_clients
-from app.rag import DocumentIngestionService, TextRAGRetriever, build_embedding_client, build_reranker
+from app.rag import (
+    DocumentIngestionService,
+    TextRAGRetriever,
+    build_embedding_client,
+    build_multimodal_embedding_client,
+    build_reranker,
+)
 from app.storage import FallbackVectorStore, PgVectorStore, QdrantVectorStore, SQLiteChatStore
 from app.tools import ToolRegistry
 
@@ -38,6 +54,7 @@ class StubTool:
 class ServiceContainer:
     llm: LLMClient
     embeddings: EmbeddingClient
+    multimodal_embeddings: MultimodalEmbeddingClient | None
     reranker: Reranker
     retriever: Retriever
     vector_store: VectorStore
@@ -50,6 +67,7 @@ class ServiceContainer:
     event_bus: InMemoryEventBus
     chat_store: SQLiteChatStore
     embedding_provider: str
+    multimodal_embedding_provider: str
     llm_provider: str
     reranker_provider: str
     multimodal_provider: str
@@ -72,6 +90,16 @@ def _build_service_container_internal(
     llm_provider = llm_provider_override or settings.llm_provider
     multimodal_provider = multimodal_provider_override or settings.multimodal_provider
     rag_openai_api_key = None if disable_external_api else settings.rag_openai_api_key
+    rag_multimodal_api_key = (
+        None
+        if disable_external_api
+        else (settings.rag_multimodal_openai_api_key or settings.rag_openai_api_key)
+    )
+    rag_multimodal_base_url = (
+        None
+        if disable_external_api
+        else (settings.rag_multimodal_openai_base_url or settings.rag_openai_base_url)
+    )
     llm_api_key = None if disable_external_api else (settings.llm_api_key or rag_openai_api_key)
     multimodal_api_key = None if disable_external_api else (settings.multimodal_api_key or llm_api_key or rag_openai_api_key)
 
@@ -85,10 +113,52 @@ def _build_service_container_internal(
         requested_dimensions=settings.rag_requested_embedding_dimensions,
     )
     embeddings = embedding_selection.client
+    multimodal_embeddings: MultimodalEmbeddingClient | None = None
+    multimodal_embedding_provider_name = "disabled"
+    multimodal_embedding_dimensions = settings.rag_multimodal_embedding_dimensions
+    if settings.rag_multimodal_enabled:
+        multimodal_embedding_provider = settings.rag_multimodal_embedding_provider
+        if disable_external_api and multimodal_embedding_provider.strip().lower().replace("-", "_") in {
+            "openai",
+            "qwen3_vl",
+            "qwen3_vl_embedding",
+            "qwen_vl_embedding",
+        }:
+            multimodal_embedding_provider = "deterministic"
+        multimodal_embedding_selection = build_multimodal_embedding_client(
+            provider=multimodal_embedding_provider,
+            model_name=settings.rag_multimodal_embedding_model,
+            api_key=rag_multimodal_api_key,
+            base_url=rag_multimodal_base_url,
+            deterministic_dimensions=settings.rag_multimodal_embedding_dimensions,
+            requested_dimensions=settings.rag_requested_embedding_dimensions,
+            endpoint_path=settings.rag_multimodal_embedding_endpoint,
+        )
+        multimodal_embeddings = multimodal_embedding_selection.client
+        multimodal_embedding_provider_name = multimodal_embedding_selection.provider_name
+        multimodal_embedding_dimensions = (
+            multimodal_embedding_selection.dimensions or settings.rag_multimodal_embedding_dimensions
+        )
+    reranker_provider = settings.rag_reranker_provider
+    if disable_external_api and reranker_provider.strip().lower().replace("-", "_") in {"openai", "qwen3_vl"}:
+        reranker_provider = "lexical"
+    reranker_openai_api_key = (
+        None
+        if disable_external_api
+        else (settings.rag_reranker_openai_api_key or llm_api_key or rag_openai_api_key)
+    )
+    reranker_openai_base_url = (
+        None
+        if disable_external_api
+        else (settings.rag_reranker_openai_base_url or settings.llm_base_url or settings.rag_openai_base_url)
+    )
     reranker_selection = build_reranker(
         enabled=settings.rag_reranker_enabled,
-        provider=settings.rag_reranker_provider,
+        provider=reranker_provider,
         cross_encoder_model=settings.rag_reranker_model,
+        openai_api_key=reranker_openai_api_key,
+        openai_base_url=reranker_openai_base_url,
+        qwen3_vl_endpoint=settings.rag_reranker_qwen3_vl_endpoint,
     )
     embedding_dimensions = embedding_selection.dimensions or settings.rag_embedding_dimensions
     pgvector_store = PgVectorStore(
@@ -107,6 +177,10 @@ def _build_service_container_internal(
                 api_key=settings.qdrant_api_key,
                 collection_name=settings.qdrant_collection_name,
                 embedding_dimensions=embedding_dimensions,
+                multimodal_embedding_dimensions=multimodal_embedding_dimensions,
+                text_vector_name=settings.rag_text_vector_name,
+                multimodal_vector_name=settings.rag_multimodal_vector_name,
+                enable_named_vectors=settings.rag_multimodal_enabled,
                 prefer_grpc=settings.qdrant_prefer_grpc,
                 timeout_sec=settings.qdrant_timeout_sec,
             )
@@ -127,6 +201,9 @@ def _build_service_container_internal(
     ingestion = DocumentIngestionService(
         embedding_client=embeddings,
         vector_store=vector_store,
+        multimodal_embedding_client=multimodal_embeddings,
+        text_vector_name=settings.rag_text_vector_name,
+        multimodal_vector_name=settings.rag_multimodal_vector_name,
         chunk_size=settings.rag_chunk_size,
         chunk_overlap=settings.rag_chunk_overlap,
         max_source_bytes=settings.rag_max_source_bytes,
@@ -141,15 +218,24 @@ def _build_service_container_internal(
         video_remote_fetch_timeout_sec=settings.multimodal_video_remote_fetch_timeout_sec,
         video_max_remote_source_bytes=settings.multimodal_video_max_remote_source_bytes,
         video_require_frame_findings=settings.multimodal_video_require_frame_findings,
+        video_ingest_enrich_with_analysis=settings.multimodal_video_ingest_enrich_with_analysis,
+        video_audio_transcription_enabled=settings.multimodal_video_audio_transcription_enabled,
+        video_audio_transcription_model=settings.multimodal_video_audio_transcription_model,
+        video_audio_transcription_language=settings.multimodal_video_audio_transcription_language,
+        video_audio_transcription_max_segments=settings.multimodal_video_audio_transcription_max_segments,
     )
     retriever = TextRAGRetriever(
         embedding_client=embeddings,
         vector_store=vector_store,
+        multimodal_embedding_client=multimodal_embeddings,
         reranker=reranker_selection.reranker,
         dense_top_k=settings.rag_dense_top_k,
         lexical_top_k=settings.rag_lexical_top_k,
         rrf_k=settings.rag_rrf_k,
         rerank_pool_size=settings.rag_rerank_pool_size,
+        text_vector_name=settings.rag_text_vector_name,
+        multimodal_vector_name=settings.rag_multimodal_vector_name,
+        use_text_dense_branch=settings.rag_multimodal_fuse_text_dense,
     )
     tools: list[Tool] = [StubTool()]
     tool_registry = ToolRegistry(tools)
@@ -197,6 +283,7 @@ def _build_service_container_internal(
     return ServiceContainer(
         llm=llm,
         embeddings=embeddings,
+        multimodal_embeddings=multimodal_embeddings,
         reranker=reranker_selection.reranker,
         retriever=retriever,
         vector_store=vector_store,
@@ -209,6 +296,7 @@ def _build_service_container_internal(
         event_bus=event_bus,
         chat_store=SQLiteChatStore(chat_store_path),
         embedding_provider=embedding_selection.provider_name,
+        multimodal_embedding_provider=multimodal_embedding_provider_name,
         llm_provider=llm_selection.provider_name,
         reranker_provider=reranker_selection.provider_name,
         multimodal_provider=multimodal_selection.provider_name,
