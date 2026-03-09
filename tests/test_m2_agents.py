@@ -1,6 +1,6 @@
 import asyncio
 
-from app.agents import AgentOrchestrator, AnalystAgent, AnswerAgent, ResearchAgent
+from app.agents import AgentOrchestrator, AgentState, AnalystAgent, AnswerAgent, ResearchAgent
 from app.tools.registry import ToolRegistry
 
 
@@ -26,6 +26,15 @@ class _LLMStub:
     async def generate(self, prompt: str, context: list[str] | None = None) -> str:
         ctx = " ".join(context or [])
         return f"Answer for {prompt}: {ctx}"
+
+
+class _CapturingLLMStub:
+    def __init__(self) -> None:
+        self.last_context: list[str] = []
+
+    async def generate(self, prompt: str, context: list[str] | None = None) -> str:  # noqa: ARG002
+        self.last_context = list(context or [])
+        return "captured"
 
 
 class _WebSearchTool:
@@ -227,3 +236,177 @@ def test_research_agent_extracts_effective_user_query_for_tool_payload() -> None
     result = first.get("result", {})
     assert "ntt data" in str(result.get("effective_query", "")).lower()
     assert "current user request" not in str(result.get("effective_query", "")).lower()
+
+
+def test_research_agent_retries_empty_retrieval_for_video_text_intent() -> None:
+    class _RetryingRetrieverStub:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def retrieve(
+            self,
+            query: str,
+            top_k: int = 5,
+            metadata_filter: dict | None = None,
+        ) -> list[dict]:
+            self.calls.append(
+                {
+                    "query": query,
+                    "top_k": top_k,
+                    "metadata_filter": dict(metadata_filter or {}),
+                }
+            )
+            if len(self.calls) == 1:
+                return []
+            return [
+                {
+                    "source": "file:///tmp/food.mp4",
+                    "snippet": "Audio event: me gustan los tacos.",
+                    "chunk_id": 7,
+                    "offset": 70,
+                    "score": 0.82,
+                    "modality": "video",
+                    "timestamp_sec": 1.9,
+                }
+            ]
+
+    registry = ToolRegistry([])
+    retriever = _RetryingRetrieverStub()
+    research_agent = ResearchAgent(
+        retriever=retriever,  # type: ignore[arg-type]
+        tool_registry=registry,
+        retry_on_empty_retrieval=True,
+        retry_empty_retrieval_top_k=9,
+    )
+    orchestrator = AgentOrchestrator(
+        research_agent=research_agent,
+        analyst_agent=AnalystAgent(),
+        answer_agent=AnswerAgent(llm=_LLMStub()),
+        max_steps=6,
+    )
+    state = asyncio.run(
+        orchestrator.run(
+            query="Whats his opinion on mexican food in this video? Check the text in the video.",
+            trace={"request_id": "r6", "trace_id": "t6"},
+            allowed_tools=[],
+            tool_budget=1,
+        )
+    )
+    assert len(retriever.calls) >= 2
+    assert retriever.calls[1]["metadata_filter"].get("modality") == "video"
+    assert state.retrieved_context
+    assert any("retrieval_retry_applied" in note for note in state.analysis_notes)
+
+
+def test_research_agent_prioritizes_transcript_rows_in_tool_payload_context() -> None:
+    class _MixedVideoRetrieverStub:
+        async def retrieve(
+            self,
+            query: str,  # noqa: ARG002
+            top_k: int = 5,
+            metadata_filter: dict | None = None,  # noqa: ARG002
+        ) -> list[dict]:
+            rows: list[dict] = []
+            for index in range(10):
+                rows.append(
+                    {
+                        "source": "file:///tmp/mixed.mp4",
+                        "snippet": f"Visual event {index}",
+                        "chunk_id": index,
+                        "offset": index * 50,
+                        "score": 0.95 - (index * 0.01),
+                        "modality": "video",
+                    }
+                )
+            rows.append(
+                {
+                    "source": "file:///tmp/mixed.mp4",
+                    "snippet": "Audio event: Me gustan los tacos",
+                    "chunk_id": 999,
+                    "offset": 9_999,
+                    "score": 0.1,
+                    "modality": "video",
+                }
+            )
+            return rows[:top_k]
+
+    class _VideoProbeEchoTool:
+        name = "video_probe"
+
+        async def run(self, payload: dict) -> dict:
+            return {
+                "status": "ok",
+                "payload_context": list(payload.get("retrieved_context", [])),
+            }
+
+    registry = ToolRegistry([_VideoProbeEchoTool()])
+    research_agent = ResearchAgent(retriever=_MixedVideoRetrieverStub(), tool_registry=registry)  # type: ignore[arg-type]
+    orchestrator = AgentOrchestrator(
+        research_agent=research_agent,
+        analyst_agent=AnalystAgent(),
+        answer_agent=AnswerAgent(llm=_LLMStub()),
+        max_steps=6,
+    )
+    state = asyncio.run(
+        orchestrator.run(
+            query="In this video, what is said?",
+            trace={"request_id": "r7a", "trace_id": "t7a"},
+            allowed_tools=["video_probe"],
+            tool_budget=1,
+            retrieval_top_k=12,
+        )
+    )
+    assert state.tool_outputs
+    first = state.tool_outputs[0]
+    payload_context = first.get("result", {}).get("payload_context", [])
+    assert isinstance(payload_context, list)
+    assert payload_context
+    assert str(payload_context[0].get("snippet", "")).lower().startswith("audio event:")
+
+
+def test_answer_agent_prioritizes_transcript_and_tool_outputs_in_context() -> None:
+    llm = _CapturingLLMStub()
+    agent = AnswerAgent(llm=llm)
+    state = AgentState(
+        query="What does he say about tacos?",
+        trace={"request_id": "r7", "trace_id": "t7"},
+        allowed_tools=["web_search", "video_probe"],
+    )
+    state.retrieved_context = [
+        {"source": "file:///tmp/video.mp4", "chunk_id": 1, "snippet": "Visual event one.", "modality": "video"},
+        {"source": "file:///tmp/video.mp4", "chunk_id": 2, "snippet": "Visual event two.", "modality": "video"},
+        {"source": "file:///tmp/video.mp4", "chunk_id": 3, "snippet": "Visual event three.", "modality": "video"},
+        {"source": "file:///tmp/video.mp4", "chunk_id": 4, "snippet": "Visual event four.", "modality": "video"},
+        {"source": "file:///tmp/video.mp4", "chunk_id": 5, "snippet": "Visual event five.", "modality": "video"},
+        {
+            "source": "file:///tmp/video.mp4",
+            "chunk_id": 6,
+            "snippet": "Audio event: Me gustan los tacos",
+            "modality": "video",
+        },
+    ]
+    state.tool_outputs = [
+        {
+            "tool": "web_search",
+            "status": "ok",
+            "result": {
+                "query": "mexican food thumbs up meaning",
+                "provider": "duckduckgo_html",
+                "results": [
+                    {
+                        "title": "Thumbs up",
+                        "snippet": "Thumbs up is usually a positive signal.",
+                        "url": "https://example.com/thumbs-up",
+                    }
+                ],
+            },
+        }
+    ]
+    state.analysis_notes = ["retrieved_chunks=6", "tool_ok=['web_search']"]
+
+    state = asyncio.run(agent.run(state))
+    assert state.final_answer == "captured"
+    joined = " ".join(llm.last_context).lower()
+    assert "audio event: me gustan los tacos" in joined
+    assert "tool:web_search" in joined
+    assert "thumbs up is usually a positive signal" in joined

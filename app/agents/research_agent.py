@@ -17,6 +17,8 @@ class ResearchAgent:
         tool_timeout_sec: float = 2.0,
         tool_retries: int = 1,
         max_tools_per_pass: int = 2,
+        retry_on_empty_retrieval: bool = True,
+        retry_empty_retrieval_top_k: int = 12,
         event_bus: InMemoryEventBus | None = None,
     ) -> None:
         self._retriever = retriever
@@ -25,6 +27,8 @@ class ResearchAgent:
         self._tool_timeout_sec = tool_timeout_sec
         self._tool_retries = tool_retries
         self._max_tools_per_pass = max(1, int(max_tools_per_pass))
+        self._retry_on_empty_retrieval = bool(retry_on_empty_retrieval)
+        self._retry_empty_retrieval_top_k = max(1, int(retry_empty_retrieval_top_k))
         self._event_bus = event_bus
 
     async def run(self, state: AgentState) -> AgentState:
@@ -46,6 +50,42 @@ class ResearchAgent:
         except Exception as exc:
             state.errors.append(f"retrieval_error:{exc}")
             state.retrieved_context = []
+        if (
+            self._retry_on_empty_retrieval
+            and not state.retrieved_context
+            and self._query_targets_video_text(state.query)
+        ):
+            retry_top_k = max(retrieval_top_k, self._retry_empty_retrieval_top_k)
+            retry_filter = dict(state.retrieval_filter)
+            if "modality" not in retry_filter:
+                retry_filter["modality"] = "video"
+            try:
+                state.retrieved_context = await self._retriever.retrieve(
+                    state.query,
+                    top_k=retry_top_k,
+                    metadata_filter=retry_filter or None,
+                )
+            except Exception as exc:
+                state.errors.append(f"retrieval_retry_error:{exc}")
+                state.retrieved_context = []
+            if not state.retrieved_context:
+                augmented_query = (
+                    f"{state.query} "
+                    "Focus on spoken text, transcript, and what is said in the video."
+                )
+                try:
+                    state.retrieved_context = await self._retriever.retrieve(
+                        augmented_query,
+                        top_k=retry_top_k,
+                        metadata_filter=state.retrieval_filter or None,
+                    )
+                except Exception as exc:
+                    state.errors.append(f"retrieval_retry_augmented_error:{exc}")
+                    state.retrieved_context = []
+            if state.retrieved_context:
+                state.analysis_notes.append(
+                    f"retrieval_retry_applied:video_text_intent;retrieved={len(state.retrieved_context)}"
+                )
 
         effective_query = self._extract_effective_tool_query(state.query)
         selected_tools = self._select_tools(
@@ -140,7 +180,8 @@ class ResearchAgent:
         effective_query: str | None = None,
     ) -> dict:
         compact_context: list[dict] = []
-        for row in state.retrieved_context[:8]:
+        prioritized_context = self._prioritize_tool_payload_context(state.retrieved_context, max_items=12)
+        for row in prioritized_context:
             if not isinstance(row, dict):
                 continue
             compact_context.append(
@@ -177,6 +218,20 @@ class ResearchAgent:
             payload["max_frames"] = 24
 
         return payload
+
+    @classmethod
+    def _prioritize_tool_payload_context(cls, rows: list[dict], max_items: int) -> list[dict]:
+        transcript_rows: list[dict] = []
+        other_rows: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            snippet = str(row.get("snippet", ""))
+            if cls._is_transcript_like_snippet(snippet):
+                transcript_rows.append(row)
+            else:
+                other_rows.append(row)
+        return [*transcript_rows, *other_rows][: max(1, int(max_items))]
 
     def _select_tools(
         self,
@@ -346,3 +401,38 @@ class ResearchAgent:
             "try once more",
         }
         return normalized in generic_tokens
+
+    @staticmethod
+    def _query_targets_video_text(query: str) -> bool:
+        lowered = query.lower()
+        video_markers = ("video", "clip", "frame", "scene", "timestamp")
+        text_markers = (
+            "what is said",
+            "what did he say",
+            "what do i say",
+            "speech",
+            "spoken",
+            "transcript",
+            "audio",
+            "text in the video",
+            "text on the video",
+            "check the text",
+        )
+        has_video = any(marker in lowered for marker in video_markers)
+        has_text_or_audio = any(marker in lowered for marker in text_markers)
+        return has_video and has_text_or_audio
+
+    @staticmethod
+    def _is_transcript_like_snippet(snippet: str) -> bool:
+        lowered = snippet.strip().lower()
+        if not lowered:
+            return False
+        transcript_patterns = (
+            "audio event:",
+            "audio transcript:",
+            "spoken text:",
+            "transcript:",
+            "subtitle:",
+            "caption:",
+        )
+        return any(token in lowered for token in transcript_patterns)

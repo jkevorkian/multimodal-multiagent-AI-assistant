@@ -17,6 +17,7 @@ digraph MMAA {
         color="#CBD5E0";
         orchestrator [label="AgentOrchestrator"];
         research [label="ResearchAgent"];
+        retrieval_retry [label="Empty-Retrieval Retry\\n(video/text intent fallback)"];
         analyst [label="AnalystAgent"];
         answer [label="AnswerAgent"];
         registry [label="ToolRegistry\\n(stub/rag/web/url/fs/metrics)"];
@@ -84,6 +85,8 @@ digraph MMAA {
     ingest_sources -> store [style=dashed];
 
     orchestrator -> research;
+    research -> retrieval_retry [style=dashed, label="if retrieved_context == 0\\nand video-text intent"];
+    retrieval_retry -> research [style=dashed, label="retry result"];
     orchestrator -> analyst;
     orchestrator -> answer;
     research -> retriever;
@@ -298,6 +301,7 @@ def high_level_flow_points() -> list[str]:
         "RAG path: ingest -> chunk -> embed -> persist -> retrieve -> answer with citations.",
         "Indexed Sources path: /ingest/sources summarizes what is currently stored in the vector layer.",
         "Agent path: LangGraph orchestrator executes research, analysis, and answer stages with bounded tools.",
+        "For video-text intent, research can run an empty-retrieval retry pass (video-modality fallback + augmented query).",
         "Tool calls are routed through the registry with timeout/retry controls; /agents/tools exposes discoverable tool names/descriptions.",
         "Media clarification tools can re-analyze retrieved image/video sources at runtime with query-specific prompts (vision_probe/video_probe).",
         "LLM path uses provider selection: OpenAI when configured, grounded heuristic fallback otherwise.",

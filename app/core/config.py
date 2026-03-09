@@ -121,6 +121,8 @@ class Settings(BaseSettings):
     agent_tool_timeout_sec: float = 4.0
     agent_tool_retries: int = 1
     agent_max_tools_per_research_pass: int = 2
+    agent_retry_on_empty_retrieval: bool = True
+    agent_retry_empty_retrieval_top_k: int = 12
     agent_max_revision_iterations: int = 0
     agent_run_timeout_sec: float = 45.0
     agent_retrieval_top_k: int = 5

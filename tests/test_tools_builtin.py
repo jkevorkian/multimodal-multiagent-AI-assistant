@@ -290,3 +290,38 @@ def test_video_probe_uses_retrieved_video_candidate_and_timestamp_hint() -> None
     assert payload["sample_fps"] == 2.0
     assert payload["max_frames"] == 18
     assert payload["timestamp_sec"] == 12.5
+    assert isinstance(payload.get("text_evidence"), list)
+    assert payload["text_evidence"]
+    assert payload["text_evidence_status"] == "missing_in_context"
+
+
+def test_video_probe_collects_transcript_evidence_from_retrieved_context() -> None:
+    tool = VideoProbeTool(video_client=_VideoClientStub(), default_sample_fps=1.0, default_max_frames=12)  # type: ignore[arg-type]
+    payload = asyncio.run(
+        tool.run(
+            {
+                "query": "what is said in the clip?",
+                "retrieved_context": [
+                    {
+                        "source": "file:///tmp/clip.mp4",
+                        "modality": "video",
+                        "chunk_id": 2,
+                        "timestamp_sec": 1.0,
+                        "score": 0.95,
+                        "snippet": "Visual event: Person gives thumbs up.",
+                    },
+                    {
+                        "source": "file:///tmp/clip.mp4",
+                        "modality": "video",
+                        "chunk_id": 9,
+                        "timestamp_sec": 1.1,
+                        "score": 0.65,
+                        "snippet": "Audio event: Me gustan los tacos",
+                    },
+                ],
+            }
+        )
+    )
+    assert payload["status"] == "ok"
+    assert payload["text_evidence_status"] == "found"
+    assert any("me gustan los tacos" in str(item).lower() for item in payload["text_evidence"])

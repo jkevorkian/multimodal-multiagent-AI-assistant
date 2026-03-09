@@ -592,6 +592,80 @@ def _extract_media_candidates(payload: dict, modality: str) -> list[dict[str, An
     return candidates
 
 
+def _is_transcript_like_video_snippet(snippet: str) -> bool:
+    lowered = snippet.strip().lower()
+    if not lowered:
+        return False
+    return (
+        lowered.startswith("audio event:")
+        or lowered.startswith("audio transcript:")
+        or "audio event:" in lowered
+        or "audio transcript:" in lowered
+        or lowered.startswith("spoken text:")
+        or lowered.startswith("subtitle:")
+        or lowered.startswith("caption:")
+    )
+
+
+def _collect_video_text_evidence(
+    *,
+    payload: dict,
+    source: str,
+    selected: dict[str, Any],
+    max_items: int = 4,
+) -> list[str]:
+    context_rows = payload.get("retrieved_context", [])
+    if not isinstance(context_rows, list):
+        context_rows = []
+
+    try:
+        selected_timestamp = float(selected.get("timestamp_sec")) if selected.get("timestamp_sec") is not None else None
+    except (TypeError, ValueError):
+        selected_timestamp = None
+
+    candidates: list[tuple[float, str]] = []
+    for row in context_rows:
+        if not isinstance(row, dict):
+            continue
+        row_source = str(row.get("source", "")).strip()
+        if row_source != source:
+            continue
+        row_modality = str(row.get("modality", "video")).strip().lower()
+        if row_modality != "video":
+            continue
+        snippet = str(row.get("snippet", "")).strip()
+        if not snippet or not _is_transcript_like_video_snippet(snippet):
+            continue
+        timestamp_raw = row.get("timestamp_sec")
+        try:
+            timestamp = float(timestamp_raw) if timestamp_raw is not None else None
+        except (TypeError, ValueError):
+            timestamp = None
+        if selected_timestamp is not None and timestamp is not None:
+            distance = abs(timestamp - selected_timestamp)
+        elif selected_timestamp is not None and timestamp is None:
+            distance = 999_999.0
+        else:
+            distance = 0.0
+        normalized = " ".join(snippet.split())
+        candidates.append((distance, normalized))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda item: item[0])
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for _, snippet in candidates:
+        if snippet in seen:
+            continue
+        seen.add(snippet)
+        deduped.append(snippet)
+        if len(deduped) >= max(1, int(max_items)):
+            break
+    return deduped
+
+
 class VisionProbeTool:
     name = "vision_probe"
     description = (
@@ -662,6 +736,16 @@ class VideoProbeTool:
         if not source:
             return {"status": "error", "error": "invalid_video_source"}
 
+        text_evidence = _collect_video_text_evidence(
+            payload=payload,
+            source=source,
+            selected=selected,
+            max_items=4,
+        )
+        text_evidence_status = "found" if text_evidence else "missing_in_context"
+        if not text_evidence:
+            text_evidence = ["No transcript/audio snippet was retrieved for this video source."]
+
         sample_fps_raw = _as_number(payload.get("sample_fps"), float)
         max_frames_raw = _as_number(payload.get("max_frames"), int)
         sample_fps = float(sample_fps_raw) if isinstance(sample_fps_raw, float) else self._default_sample_fps
@@ -676,9 +760,15 @@ class VideoProbeTool:
             focus_hint = f" Prioritize evidence around timestamp {float(timestamp_sec):.1f}s."
         elif frame_index is not None:
             focus_hint = f" Prioritize evidence around frame index {int(frame_index)}."
+        transcript_hint = ""
+        if text_evidence_status == "found":
+            compact_snippets = " | ".join(str(item) for item in text_evidence[:2])
+            transcript_hint = f" Known transcript cues from retrieval: {compact_snippets}"
         effective_prompt = prompt or (
             "Clarify events, actions, and spoken/visible evidence in this video that answer the user query."
-            f" Query: {query}.{focus_hint}"
+            " Always include a short 'Spoken text' field with exact quoted words if audible, otherwise 'none detected'."
+            " Always include a short 'On-screen text' field with visible text, otherwise 'none detected'."
+            f" Query: {query}.{focus_hint}{transcript_hint}"
         )
 
         summary = await self._video_client.analyze_video(
@@ -699,6 +789,8 @@ class VideoProbeTool:
             "timestamp_sec": timestamp_sec,
             "frame_index": frame_index,
             "snippet_anchor": selected.get("snippet", ""),
+            "text_evidence": text_evidence,
+            "text_evidence_status": text_evidence_status,
         }
 
 

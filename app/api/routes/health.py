@@ -72,7 +72,14 @@ async def health_models(
             component="answer_llm",
             provider=container.llm_provider,
             model=settings.llm_model,
-            details=[f"tool_budget={settings.agent_tool_budget}", f"retrieval_top_k={settings.agent_retrieval_top_k}"],
+            details=[
+                f"max_steps={settings.agent_max_steps}",
+                f"tool_budget={settings.agent_tool_budget}",
+                f"tool_timeout_sec={settings.agent_tool_timeout_sec}",
+                f"retrieval_top_k={settings.agent_retrieval_top_k}",
+                f"retry_on_empty_retrieval={settings.agent_retry_on_empty_retrieval}",
+                f"retry_empty_retrieval_top_k={settings.agent_retry_empty_retrieval_top_k}",
+            ],
         ),
         RuntimeModelEntry(
             subsystem="multimodal",

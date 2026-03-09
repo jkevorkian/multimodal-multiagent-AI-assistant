@@ -75,6 +75,8 @@ flowchart LR
     VISION --> ING
     VIDEO --> ING
 ```
+## DEMO
+![alt text](docs/demo.gif)
 
 What to look at as a newcomer:
 - `app/api/routes/*`: HTTP surface (ingest, query, agents, runs, vision, video, chat, metrics).

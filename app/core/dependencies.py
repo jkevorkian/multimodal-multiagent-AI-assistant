@@ -248,6 +248,8 @@ def _build_service_container_internal(
         tool_timeout_sec=settings.agent_tool_timeout_sec,
         tool_retries=settings.agent_tool_retries,
         max_tools_per_pass=settings.agent_max_tools_per_research_pass,
+        retry_on_empty_retrieval=settings.agent_retry_on_empty_retrieval,
+        retry_empty_retrieval_top_k=settings.agent_retry_empty_retrieval_top_k,
         event_bus=event_bus,
     )
     checkpoint_store = InMemoryCheckpointStore() if settings.agent_checkpoint_enabled else NullCheckpointStore()
