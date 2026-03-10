@@ -18,8 +18,8 @@ class LoopController:
         self,
         max_steps: int,
         max_tool_calls: int,
-        stagnation_window: int = 3,
-        timeout_budget_sec: float = 30.0,
+        stagnation_window: int = 4,
+        timeout_budget_sec: float = 120.0,
     ) -> None:
         self._max_steps = max_steps
         self._max_tool_calls = max_tool_calls

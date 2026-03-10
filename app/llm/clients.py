@@ -43,9 +43,8 @@ class OpenAILLMClient:
         system_prompt = (
             "You are an evidence-aware assistant.\n"
             "Prioritize provided evidence and cite concrete details from it when available.\n"
-            "You may make careful, limited inferences when they are strongly implied by the evidence.\n"
-            "When you infer beyond explicit evidence, state it as an inference and keep it conservative.\n"
-            "Do not fabricate specific facts, entities, numbers, or events not supported by evidence.\n"
+            "You may make careful inferences when implied by the evidence, but always state when an inference is being made.\n"
+            "Do not fabricate specific facts, entities, numbers, or events not supported by evidence. But you can make inferences if you do detail it being an inference.\n"
             "Unless the user explicitly asks for translation, answer in the same language as the user's question."
         )
         user_prompt = f"Question:\n{prompt}\n\nEvidence:\n{evidence if evidence else '(none)'}"
